@@ -4,6 +4,14 @@
 
 This binding maps a Y.XmlFragment to the ProseMirror state.
 
+## Why was this package forked from [y-prosemirror](https://github.com/yjs/y-prosemirror)?
+
+We forked y-prosemirror to create a Tiptap-specific package with changes we needed for Tiptap-related features. These modifications were too specific to be merged upstream or would have added maintenance overhead for the y-prosemirror maintainers.
+
+Where feasible, we contribute improvements and fixes back to y-prosemirror to support the broader ecosystem.
+
+This package is designed for use with Tiptap and is not intended as a general-purpose Yjs binding for ProseMirror.
+
 ## Features
 
 * Sync ProseMirror state
