@@ -210,6 +210,7 @@ export const yCursorPlugin = (
       }
       const updateCursorInfo = () => {
         const ystate = ySyncPluginKey.getState(view.state)
+        if (ystate == null || ystate.binding == null) return
         // @note We make implicit checks when checking for the cursor property
         const current = awareness.getLocalState() || {}
         if (view.hasFocus()) {
