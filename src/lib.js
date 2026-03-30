@@ -46,6 +46,8 @@ const applyMetas = (view, metas, retry = true) => {
     } catch (err) {
       if (err instanceof RangeError && err.message === 'Applying a mismatched transaction') {
         if (retry) {
+          // Retry once with `retry = false` so a persistent mismatch cannot
+          // reschedule itself forever.
           // Recreate the meta-only transaction from the latest editor state.
           eventloop.timeout(0, () => applyMetas(view, metas, false))
         }
