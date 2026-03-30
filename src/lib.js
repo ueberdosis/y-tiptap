@@ -20,6 +20,20 @@ import * as eventloop from 'lib0/eventloop'
  */
 let viewsToUpdate = null
 
+/**
+ * Dispatch queued plugin metadata for a view, retrying once if the transaction
+ * became stale while waiting in the async awareness-update queue.
+ *
+ * Cursor awareness updates are decoration-only refreshes. If a real document
+ * transaction lands before this queued meta transaction is applied, ProseMirror
+ * will reject the older transaction with "Applying a mismatched transaction".
+ * In that case we rebuild the meta transaction from the latest state once, and
+ * stop after a second mismatch instead of crashing the editor.
+ *
+ * @param {EditorView} view
+ * @param {Map<any, any>} metas
+ * @param {boolean} [retry=true]
+ */
 const applyMetas = (view, metas, retry = true) => {
   const syncState = ySyncPluginKey.getState(view.state)
   if (syncState && syncState.binding && !syncState.binding.isDestroyed) {
@@ -32,6 +46,7 @@ const applyMetas = (view, metas, retry = true) => {
     } catch (err) {
       if (err instanceof RangeError && err.message === 'Applying a mismatched transaction') {
         if (retry) {
+          // Recreate the meta-only transaction from the latest editor state.
           eventloop.timeout(0, () => applyMetas(view, metas, false))
         }
         return
@@ -52,6 +67,7 @@ const updateMetas = () => {
 export const setMeta = (view, key, value) => {
   if (!viewsToUpdate) {
     viewsToUpdate = new Map()
+    // Awareness listeners can fire in bursts, so batch them into one tick.
     eventloop.timeout(0, updateMetas)
   }
   map.setIfUndefined(viewsToUpdate, view, map.create).set(key, value)

@@ -500,6 +500,7 @@ export const testStaleAwarenessTransactions = async (_tc) => {
 
       if (!insertedContent && cursorMeta && cursorMeta.awarenessUpdated) {
         insertedContent = true
+        // Force the queued awareness transaction to become stale before apply.
         applyTransaction(view.state.tr.insertText('x', 1))
       }
 
