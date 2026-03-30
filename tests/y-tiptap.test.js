@@ -11,6 +11,8 @@ import {
   prosemirrorJSONToYXmlFragment,
   redo,
   undo,
+  yCursorPlugin,
+  yCursorPluginKey,
   yDocToProsemirrorJSON,
   ySyncPlugin,
   ySyncPluginKey,
@@ -470,6 +472,49 @@ export const testInitialCursorPosition2 = async (_tc) => {
   console.log('anchor', view.state.selection.anchor)
   t.assert(view.state.selection.anchor === 1)
   t.assert(view.state.selection.head === 1)
+}
+
+export const testStaleAwarenessTransactions = async (_tc) => {
+  const ydoc = new Y.Doc()
+  const awareness = new Awareness(ydoc)
+  let insertedContent = false
+  const view = new EditorView(null, {
+    // @ts-ignore
+    state: EditorState.create({
+      schema,
+      plugins: [
+        ySyncPlugin(ydoc.get('prosemirror', Y.XmlFragment)),
+        yCursorPlugin(awareness)
+      ]
+    })
+  })
+
+  const applyTransaction = tr => {
+    const newState = view.state.apply(tr)
+    view.updateState(newState)
+  }
+
+  view.setProps({
+    dispatchTransaction: tr => {
+      const cursorMeta = tr.getMeta(yCursorPluginKey)
+
+      if (!insertedContent && cursorMeta && cursorMeta.awarenessUpdated) {
+        insertedContent = true
+        applyTransaction(view.state.tr.insertText('x', 1))
+      }
+
+      applyTransaction(tr)
+    }
+  })
+
+  awareness.setLocalStateField('user', {
+    name: 'Test User',
+    color: '#ff0000'
+  })
+
+  await promise.wait(10)
+
+  t.assert(view.state.doc.textContent === 'x', 'stale awareness transactions should not crash the editor')
 }
 
 export const testVersioning = async (_tc) => {

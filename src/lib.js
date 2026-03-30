@@ -20,18 +20,32 @@ import * as eventloop from 'lib0/eventloop'
  */
 let viewsToUpdate = null
 
+const applyMetas = (view, metas, retry = true) => {
+  const syncState = ySyncPluginKey.getState(view.state)
+  if (syncState && syncState.binding && !syncState.binding.isDestroyed) {
+    const tr = view.state.tr
+    metas.forEach((val, key) => {
+      tr.setMeta(key, val)
+    })
+    try {
+      view.dispatch(tr)
+    } catch (err) {
+      if (err instanceof RangeError && err.message === 'Applying a mismatched transaction') {
+        if (retry) {
+          eventloop.timeout(0, () => applyMetas(view, metas, false))
+        }
+        return
+      }
+      throw err
+    }
+  }
+}
+
 const updateMetas = () => {
   const ups = /** @type {Map<EditorView, Map<any, any>>} */ (viewsToUpdate)
   viewsToUpdate = null
   ups.forEach((metas, view) => {
-    const tr = view.state.tr
-    const syncState = ySyncPluginKey.getState(view.state)
-    if (syncState && syncState.binding && !syncState.binding.isDestroyed) {
-      metas.forEach((val, key) => {
-        tr.setMeta(key, val)
-      })
-      view.dispatch(tr)
-    }
+    applyMetas(view, metas)
   })
 }
 
