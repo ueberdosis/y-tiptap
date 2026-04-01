@@ -20,38 +20,68 @@ import * as eventloop from 'lib0/eventloop'
  */
 let viewsToUpdate = null
 
-/**
- * Dispatch one queued plugin meta entry for a view.
- *
- * @param {EditorView} view
- * @param {any} key
- * @param {any} value
- */
-const applyMeta = (view, key, value) => {
-  const syncState = ySyncPluginKey.getState(view.state)
-  if (syncState && syncState.binding && !syncState.binding.isDestroyed) {
-    const tr = view.state.tr
-    tr.setMeta(key, value)
-    view.dispatch(tr)
+class MetaEntry {
+  /**
+   * @param {EditorView} view
+   * @param {any} key
+   * @param {any} value
+   */
+  constructor (view, key, value) {
+    this.view = view
+    this.key = key
+    this.value = value
+  }
+
+  apply () {
+    const syncState = ySyncPluginKey.getState(this.view.state)
+    if (syncState && syncState.binding && !syncState.binding.isDestroyed) {
+      const tr = this.view.state.tr
+      tr.setMeta(this.key, this.value)
+      this.view.dispatch(tr)
+    }
   }
 }
 
-/**
- * Convert the queued meta updates into a stable ordered list so stale work can
- * be retried from the point where dispatch failed.
- *
- * @return {Array<[EditorView, any, any]>}
- */
-const getMetaEntries = () => {
-  const ups = /** @type {Map<EditorView, Map<any, any>>} */ (viewsToUpdate)
-  viewsToUpdate = null
-  const entries = []
-  ups.forEach((metas, view) => {
-    metas.forEach((value, key) => {
-      entries.push([view, key, value])
+class MetaEntriesQueue {
+  /**
+   * @param {Array<MetaEntry>} [entries=[]]
+   */
+  constructor (entries = []) {
+    this.entries = entries
+  }
+
+  /**
+   * @return {MetaEntry|undefined}
+   */
+  getFirst () {
+    return this.entries[0]
+  }
+
+  /**
+   * @return {MetaEntry|undefined}
+   */
+  dequeueFirst () {
+    return this.entries.shift()
+  }
+
+  /**
+   * @return {boolean}
+   */
+  isEmpty () {
+    return this.entries.length === 0
+  }
+
+  static fromViewsToUpdate () {
+    const ups = /** @type {Map<EditorView, Map<any, any>>} */ (viewsToUpdate)
+    viewsToUpdate = null
+    const entries = []
+    ups.forEach((metas, view) => {
+      metas.forEach((value, key) => {
+        entries.push(new MetaEntry(view, key, value))
+      })
     })
-  })
-  return entries
+    return new MetaEntriesQueue(entries)
+  }
 }
 
 /**
@@ -65,32 +95,33 @@ const getMetaEntries = () => {
  * on retry, we drop that entry and continue with the rest of the queue instead
  * of retrying forever or crashing the editor.
  *
- * @param {Array<[EditorView, any, any]>} [metaEntries=getMetaEntries()]
+ * @param {MetaEntriesQueue} [metaEntries=MetaEntriesQueue.fromViewsToUpdate()]
  * @param {boolean} [isRetry=false]
  */
-const updateMetas = (metaEntries = getMetaEntries(), isRetry = false) => {
-  for (let index = 0; index < metaEntries.length; index++) {
-    const [view, key, value] = metaEntries[index]
+const updateMetas = (metaEntries = MetaEntriesQueue.fromViewsToUpdate(), isRetry = false) => {
+  let isFirst = true
+  while (!metaEntries.isEmpty()) {
+    const metaEntry = metaEntries.getFirst()
     try {
-      applyMeta(view, key, value)
+      metaEntry.apply()
     } catch (err) {
       // ProseMirror throws a RangeError when this transaction was created from
       // an older state and another transaction changed the document before this
       // meta-only dispatch was applied ("Applying a mismatched transaction").
       if (err instanceof RangeError) {
-        const remainingMetaEntries = metaEntries.slice(
-          // On retry, skip the first entry because it has already failed once.
-          // This prevents an infinite reschedule loop for a persistently stale
-          // awareness update while still letting the rest of the queue flush.
-          Math.max(isRetry ? 1 : 0, index),
-        )
-        if (remainingMetaEntries.length > 0) {
-          eventloop.timeout(0, () => updateMetas(remainingMetaEntries, true))
+        if (isRetry && isFirst) {
+          // Drop the repeatedly stale entry so the queue can continue flushing.
+          metaEntries.dequeueFirst()
+        }
+        if (!metaEntries.isEmpty()) {
+          eventloop.timeout(0, () => updateMetas(metaEntries, true))
         }
         return
       }
       throw err
     }
+    isFirst = false
+    metaEntries.dequeueFirst()
   }
 }
 
