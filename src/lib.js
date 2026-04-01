@@ -21,52 +21,77 @@ import * as eventloop from 'lib0/eventloop'
 let viewsToUpdate = null
 
 /**
- * Dispatch queued plugin metadata for a view, retrying once if the transaction
- * became stale while waiting in the async awareness-update queue.
- *
- * Cursor awareness updates are decoration-only refreshes. If a real document
- * transaction lands before this queued meta transaction is applied, ProseMirror
- * will reject the older transaction with "Applying a mismatched transaction".
- * In that case we rebuild the meta transaction from the latest state once, and
- * stop after a second mismatch instead of crashing the editor.
+ * Dispatch one queued plugin meta entry for a view.
  *
  * @param {EditorView} view
- * @param {Map<any, any>} metas
- * @param {boolean} [retry=true]
+ * @param {any} key
+ * @param {any} value
  */
-const applyMetas = (view, metas, retry = true) => {
+const applyMeta = (view, key, value) => {
   const syncState = ySyncPluginKey.getState(view.state)
   if (syncState && syncState.binding && !syncState.binding.isDestroyed) {
     const tr = view.state.tr
-    metas.forEach((val, key) => {
-      tr.setMeta(key, val)
+    tr.setMeta(key, value)
+    view.dispatch(tr)
+  }
+}
+
+/**
+ * Convert the queued meta updates into a stable ordered list so stale work can
+ * be retried from the point where dispatch failed.
+ *
+ * @return {Array<[EditorView, any, any]>}
+ */
+const getMetaEntries = () => {
+  const ups = /** @type {Map<EditorView, Map<any, any>>} */ (viewsToUpdate)
+  viewsToUpdate = null
+  const entries = []
+  ups.forEach((metas, view) => {
+    metas.forEach((value, key) => {
+      entries.push([view, key, value])
     })
+  })
+  return entries
+}
+
+/**
+ * Dispatch queued plugin metadata in order, retrying only the remaining
+ * entries if a transaction becomes stale while the async queue is flushing.
+ *
+ * Cursor awareness updates are decoration-only refreshes. If a real document
+ * transaction lands before one of these queued meta transactions is applied,
+ * ProseMirror can reject it with a RangeError. In that case we reschedule the
+ * remaining entries on the next tick. If the first remaining entry fails again
+ * on retry, we drop that entry and continue with the rest of the queue instead
+ * of retrying forever or crashing the editor.
+ *
+ * @param {Array<[EditorView, any, any]>} [metaEntries=getMetaEntries()]
+ * @param {boolean} [isRetry=false]
+ */
+const updateMetas = (metaEntries = getMetaEntries(), isRetry = false) => {
+  for (let index = 0; index < metaEntries.length; index++) {
+    const [view, key, value] = metaEntries[index]
     try {
-      view.dispatch(tr)
+      applyMeta(view, key, value)
     } catch (err) {
       // ProseMirror throws a RangeError when this transaction was created from
       // an older state and another transaction changed the document before this
       // meta-only dispatch was applied ("Applying a mismatched transaction").
       if (err instanceof RangeError) {
-        if (retry) {
-          // Retry once with `retry = false` so a persistent mismatch cannot
-          // reschedule itself forever.
-          // Recreate the meta-only transaction from the latest editor state.
-          eventloop.timeout(0, () => applyMetas(view, metas, false))
+        const remainingMetaEntries = metaEntries.slice(
+          // On retry, skip the first entry because it has already failed once.
+          // This prevents an infinite reschedule loop for a persistently stale
+          // awareness update while still letting the rest of the queue flush.
+          Math.max(isRetry ? 1 : 0, index),
+        )
+        if (remainingMetaEntries.length > 0) {
+          eventloop.timeout(0, () => updateMetas(remainingMetaEntries, true))
         }
         return
       }
       throw err
     }
   }
-}
-
-const updateMetas = () => {
-  const ups = /** @type {Map<EditorView, Map<any, any>>} */ (viewsToUpdate)
-  viewsToUpdate = null
-  ups.forEach((metas, view) => {
-    applyMetas(view, metas)
-  })
 }
 
 export const setMeta = (view, key, value) => {
