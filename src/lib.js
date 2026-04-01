@@ -44,7 +44,10 @@ const applyMetas = (view, metas, retry = true) => {
     try {
       view.dispatch(tr)
     } catch (err) {
-      if (err instanceof RangeError && err.message === 'Applying a mismatched transaction') {
+      // ProseMirror throws a RangeError when this transaction was created from
+      // an older state and another transaction changed the document before this
+      // meta-only dispatch was applied ("Applying a mismatched transaction").
+      if (err instanceof RangeError) {
         if (retry) {
           // Retry once with `retry = false` so a persistent mismatch cannot
           // reschedule itself forever.
