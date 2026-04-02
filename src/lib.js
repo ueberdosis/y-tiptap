@@ -20,24 +20,115 @@ import * as eventloop from 'lib0/eventloop'
  */
 let viewsToUpdate = null
 
-const updateMetas = () => {
-  const ups = /** @type {Map<EditorView, Map<any, any>>} */ (viewsToUpdate)
-  viewsToUpdate = null
-  ups.forEach((metas, view) => {
-    const tr = view.state.tr
-    const syncState = ySyncPluginKey.getState(view.state)
+class MetaEntry {
+  /**
+   * @param {EditorView} view
+   * @param {any} key
+   * @param {any} value
+   */
+  constructor (view, key, value) {
+    this.view = view
+    this.key = key
+    this.value = value
+  }
+
+  apply () {
+    const syncState = ySyncPluginKey.getState(this.view.state)
     if (syncState && syncState.binding && !syncState.binding.isDestroyed) {
-      metas.forEach((val, key) => {
-        tr.setMeta(key, val)
-      })
-      view.dispatch(tr)
+      const tr = this.view.state.tr
+      tr.setMeta(this.key, this.value)
+      this.view.dispatch(tr)
     }
-  })
+  }
+}
+
+class MetaEntriesQueue {
+  /**
+   * @param {Array<MetaEntry>} [entries=[]]
+   */
+  constructor (entries = []) {
+    this.entries = entries
+  }
+
+  /**
+   * @return {MetaEntry|undefined}
+   */
+  getFirst () {
+    return this.entries[0]
+  }
+
+  /**
+   * @return {MetaEntry|undefined}
+   */
+  dequeueFirst () {
+    return this.entries.shift()
+  }
+
+  /**
+   * @return {boolean}
+   */
+  isEmpty () {
+    return this.entries.length === 0
+  }
+
+  static fromViewsToUpdate () {
+    const ups = /** @type {Map<EditorView, Map<any, any>>} */ (viewsToUpdate)
+    viewsToUpdate = null
+    const entries = []
+    ups.forEach((metas, view) => {
+      metas.forEach((value, key) => {
+        entries.push(new MetaEntry(view, key, value))
+      })
+    })
+    return new MetaEntriesQueue(entries)
+  }
+}
+
+/**
+ * Dispatch queued plugin metadata in order, retrying only the remaining
+ * entries if a transaction becomes stale while the async queue is flushing.
+ *
+ * Cursor awareness updates are decoration-only refreshes. If a real document
+ * transaction lands before one of these queued meta transactions is applied,
+ * ProseMirror can reject it with a RangeError. In that case we reschedule the
+ * remaining entries on the next tick. If the first remaining entry fails again
+ * on retry, we drop that entry and continue with the rest of the queue instead
+ * of retrying forever or crashing the editor.
+ *
+ * @param {MetaEntriesQueue} [metaEntries=MetaEntriesQueue.fromViewsToUpdate()]
+ * @param {boolean} [isRetry=false]
+ */
+const updateMetas = (metaEntries = MetaEntriesQueue.fromViewsToUpdate(), isRetry = false) => {
+  let isFirst = true
+  while (!metaEntries.isEmpty()) {
+    const metaEntry = metaEntries.getFirst()
+    try {
+      metaEntry.apply()
+    } catch (err) {
+      // ProseMirror throws a RangeError when this transaction was created from
+      // an older state and another transaction changed the document before this
+      // meta-only dispatch was applied ("Applying a mismatched transaction").
+      if (err instanceof RangeError) {
+        if (isRetry && isFirst) {
+          // Drop the repeatedly stale entry so the queue can continue flushing.
+          metaEntries.dequeueFirst()
+        }
+        if (!metaEntries.isEmpty()) {
+          eventloop.timeout(0, () => updateMetas(metaEntries, true))
+        }
+        return
+      }
+      throw err
+    }
+    isFirst = false
+    metaEntries.dequeueFirst()
+  }
 }
 
 export const setMeta = (view, key, value) => {
   if (!viewsToUpdate) {
     viewsToUpdate = new Map()
+    // Awareness listeners can fire in bursts, so batch them into one tick.
     eventloop.timeout(0, updateMetas)
   }
   map.setIfUndefined(viewsToUpdate, view, map.create).set(key, value)
