@@ -9,12 +9,15 @@
   "sideEffects": false,
   "scripts": {
     "clean": "rm -rf dist",
+    "changeset": "changeset",
     "dist": "npm run clean && rollup -c && tsc",
     "test": "npm run lint && rollup -c && node dist/test.cjs",
     "lint": "standard && tsc",
     "watch": "rollup -wc",
     "debug": "concurrently '0serve -o test.html' 'npm run watch'",
     "preversion": "npm run lint && npm run dist && npm run test",
+    "version": "changeset version && npm install --package-lock-only",
+    "release": "npm run dist && npm publish --access public",
     "publish": "npm run preversion && npm publish --access public",
     "publish:pre": "npm run preversion && npm publish --access public --tag beta",
     "start": "concurrently '0serve -o demo/prosemirror.html' 'npm run watch'"
@@ -56,6 +59,7 @@
     "yjs": "^13.5.38"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.30.0",
     "@rollup/plugin-commonjs": "^21.0.1",
     "@rollup/plugin-node-resolve": "^13.0.6",
     "concurrently": "^4.1.0",
