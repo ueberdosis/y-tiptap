@@ -43,8 +43,7 @@ jobs:
           publish: npm run release
           createGithubReleases: false
           title: Release a new version
-          commit: chore(release): publish a new version
+          commit: "chore(release): publish a new version"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
