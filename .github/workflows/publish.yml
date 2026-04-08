@@ -38,14 +38,14 @@ jobs:
         run: npm test
 
       - name: Archive dist artifacts
-        run: tar -cf dist-artifacts.tar dist
+        run: tar -cf "${{ runner.temp }}/dist-artifacts.tar" dist
 
       - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist-artifacts
           if-no-files-found: error
-          path: dist-artifacts.tar
+          path: ${{ runner.temp }}/dist-artifacts.tar
 
   release:
     name: Bump Versions OR Release to Registry
@@ -78,10 +78,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: dist-artifacts
-          path: .
+          path: ${{ runner.temp }}
 
       - name: Restore dist artifacts
-        run: tar -xf dist-artifacts.tar
+        run: tar -xf "${{ runner.temp }}/dist-artifacts.tar"
 
       - name: Run Changesets release flow
         uses: changesets/action@v1
