@@ -747,6 +747,12 @@ export const createNodeFromYElement = (
   computeYChange
 ) => {
   const children = []
+  // Check if this element was removed (not visible in snapshot)
+  const isRemoved = snapshot !== undefined && prevSnapshot !== undefined &&
+    !isVisible(/** @type {Y.Item} */ (el._item), snapshot)
+  // Check if element existed in prevSnapshot
+  const existedInPrev = prevSnapshot !== undefined &&
+    isVisible(/** @type {Y.Item} */ (el._item), prevSnapshot)
   /**
    * @param {Y.XmlElement | Y.XmlText} type
    */
@@ -797,14 +803,42 @@ export const createNodeFromYElement = (
   }
   if (snapshot === undefined || prevSnapshot === undefined) {
     el.toArray().forEach(createChildren)
+  } else if (isRemoved) {
+    // For removed elements:
+    // - If existed in prevSnapshot: get children as they were then
+    // - If added after prevSnapshot (and deleted before snapshot): get current children
+    if (existedInPrev) {
+      Y.typeListToArraySnapshot(el, prevSnapshot).forEach(createChildren)
+    } else {
+      // Element was added and deleted between the two snapshots
+      // Get current children (without snapshot filter)
+      el.toArray().forEach(createChildren)
+    }
   } else {
+    // For non-removed elements, use combined snapshot to show both old and new content
     Y.typeListToArraySnapshot(el, new Y.Snapshot(prevSnapshot.ds, snapshot.sv))
       .forEach(createChildren)
   }
   try {
-    const attrs = el.getAttributes(snapshot)
+    // Determine the best snapshot to use for attributes:
+    // - If removed and existed in prevSnapshot: use prevSnapshot
+    // - If removed but didn't exist in prevSnapshot (added then removed): use no snapshot (current doc state)
+    // - Otherwise: use snapshot
+    let attrs
+    if (isRemoved) {
+      if (existedInPrev) {
+        // Element existed in prevSnapshot, get attributes from there
+        attrs = el.getAttributes(prevSnapshot)
+      } else {
+        // Element was added after prevSnapshot and deleted before snapshot
+        // Get attributes from the current doc state (without snapshot filter)
+        attrs = el.getAttributes()
+      }
+    } else {
+      attrs = el.getAttributes(snapshot)
+    }
     if (snapshot !== undefined) {
-      if (!isVisible(/** @type {Y.Item} */ (el._item), snapshot)) {
+      if (isRemoved) {
         attrs.ychange = computeYChange
           ? computeYChange('removed', /** @type {Y.Item} */ (el._item).id)
           : { type: 'removed' }
@@ -846,11 +880,37 @@ const createTextNodesFromYText = (
   computeYChange
 ) => {
   const nodes = []
-  const deltas = text.toDelta(snapshot, prevSnapshot, computeYChange)
+  // Check if text node is removed and whether it existed in prevSnapshot
+  const isTextRemoved = snapshot !== undefined && prevSnapshot !== undefined &&
+    !isVisible(/** @type {Y.Item} */ (text._item), snapshot)
+  const existedInPrev = prevSnapshot !== undefined &&
+    isVisible(/** @type {Y.Item} */ (text._item), prevSnapshot)
+
+  // Determine which snapshot to use for delta:
+  // - If removed and existed in prevSnapshot: use prevSnapshot
+  // - If removed but didn't exist in prevSnapshot (added then removed): use no snapshot
+  // - Otherwise: use normal snapshot comparison
+  let deltas
+  if (isTextRemoved) {
+    if (existedInPrev) {
+      deltas = text.toDelta(prevSnapshot, undefined, computeYChange)
+    } else {
+      // Added after prevSnapshot and deleted before snapshot - get current content
+      deltas = text.toDelta()
+    }
+  } else {
+    deltas = text.toDelta(snapshot, prevSnapshot, computeYChange)
+  }
+
   try {
     for (let i = 0; i < deltas.length; i++) {
       const delta = deltas[i]
-      nodes.push(schema.text(delta.insert, attributesToMarks(delta.attributes, schema)))
+      const attrs = delta.attributes || {}
+      // For removed text nodes, add the ychange marker
+      if (isTextRemoved && computeYChange) {
+        attrs.ychange = computeYChange('removed', /** @type {Y.Item} */ (text._item).id)
+      }
+      nodes.push(schema.text(delta.insert, attributesToMarks(attrs, schema)))
     }
   } catch (e) {
     // an error occured while creating the node. This is probably a result of a concurrent action.
