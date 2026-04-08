@@ -17,7 +17,7 @@
     "debug": "concurrently '0serve -o test.html' 'npm run watch'",
     "preversion": "npm run lint && npm run dist && npm run test",
     "version": "changeset version && npm install --package-lock-only",
-    "release": "npm run dist && npm publish --access public",
+    "release": "npm publish --access public",
     "publish": "npm run preversion && npm publish --access public",
     "publish:pre": "npm run preversion && npm publish --access public --tag beta",
     "start": "concurrently '0serve -o demo/prosemirror.html' 'npm run watch'"
