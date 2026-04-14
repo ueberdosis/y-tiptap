@@ -95,7 +95,7 @@ export const createDecorations = (
       return
     }
 
-    if (aw.cursor != null) {
+    if (aw && aw.cursor != null) {
       const user = aw.user || {}
       if (user.color == null) {
         user.color = '#ffa500'
