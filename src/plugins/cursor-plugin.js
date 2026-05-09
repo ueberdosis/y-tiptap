@@ -95,6 +95,8 @@ export const createDecorations = (
       return
     }
 
+    // `aw` can be null when a client disconnects, so we guard against it
+    // before reading `cursor` to avoid a TypeError.
     if (aw && aw.cursor != null) {
       const user = aw.user || {}
       if (user.color == null) {
