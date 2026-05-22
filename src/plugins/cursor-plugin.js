@@ -212,6 +212,9 @@ export const yCursorPlugin = (
       }
       const updateCursorInfo = () => {
         const ystate = ySyncPluginKey.getState(view.state)
+        // `ystate` is undefined during sync-plugin init and Y.Doc transitions;
+        // reading from it here would throw and break cursor tracking for the view.
+        if (!ystate || !ystate.binding) return
         // @note We make implicit checks when checking for the cursor property
         const current = awareness.getLocalState() || {}
         if (view.hasFocus()) {
