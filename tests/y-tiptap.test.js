@@ -107,6 +107,98 @@ export const testPluginIntegrity = (_tc) => {
 }
 
 /**
+ * Y.UndoManager registers a `doc.on('destroy', …)` listener in its constructor
+ * that UndoManager.destroy() never removes. When the doc outlives the editor
+ * (e.g. several editors sharing one provider), that listener keeps the manager —
+ * and everything it references — reachable, leaking memory on every destroy.
+ * yUndoPlugin must remove that listener when the plugin view is destroyed.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testUndoManagerDocDestroyListenerCleanup = (_tc) => {
+  const ydoc = new Y.Doc()
+  const countDocDestroyListeners = () => {
+    const observers = ydoc._observers.get('destroy')
+    return observers ? observers.size : 0
+  }
+  const baseline = countDocDestroyListeners()
+
+  const view = new EditorView(null, {
+    // @ts-ignore
+    state: EditorState.create({
+      schema,
+      plugins: [
+        ySyncPlugin(ydoc.get('prosemirror', Y.XmlFragment)),
+        yUndoPlugin()
+      ]
+    })
+  })
+  view.dispatch(
+    view.state.tr.insert(
+      0,
+      /** @type {any} */ (
+        schema.node('paragraph', undefined, schema.text('hello world'))
+      )
+    )
+  )
+
+  t.assert(
+    countDocDestroyListeners() > baseline,
+    'UndoManager registered a doc destroy listener'
+  )
+
+  view.destroy()
+
+  t.assert(
+    countDocDestroyListeners() === baseline,
+    'doc destroy listener is removed after view.destroy'
+  )
+}
+
+/**
+ * A caller-provided UndoManager owns its own lifecycle, so yUndoPlugin must not
+ * strip listeners it did not add.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testExternalUndoManagerListenersUntouched = (_tc) => {
+  const ydoc = new Y.Doc()
+  const fragment = ydoc.get('prosemirror', Y.XmlFragment)
+  const externalUndoManager = new Y.UndoManager(fragment)
+  const countDocDestroyListeners = () => {
+    const observers = ydoc._observers.get('destroy')
+    return observers ? observers.size : 0
+  }
+  const withExternal = countDocDestroyListeners()
+
+  const view = new EditorView(null, {
+    // @ts-ignore
+    state: EditorState.create({
+      schema,
+      plugins: [
+        ySyncPlugin(fragment),
+        yUndoPlugin({ undoManager: externalUndoManager })
+      ]
+    })
+  })
+  view.dispatch(
+    view.state.tr.insert(
+      0,
+      /** @type {any} */ (
+        schema.node('paragraph', undefined, schema.text('hello world'))
+      )
+    )
+  )
+  view.destroy()
+
+  // The external manager's listener must still be present after destroy.
+  t.assert(
+    countDocDestroyListeners() === withExternal,
+    'externally-provided UndoManager listeners are left intact'
+  )
+}
+
+/**
  * Test that createDecorations handles missing ySyncPlugin state gracefully.
  *
  * This can happen during editor initialization when the ySyncPlugin state
