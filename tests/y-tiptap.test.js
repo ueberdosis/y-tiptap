@@ -23,6 +23,7 @@ import { Awareness } from 'y-protocols/awareness'
 import {
   EditorState,
   Plugin,
+  Selection,
   TextSelection,
   NodeSelection
 } from 'prosemirror-state'
@@ -48,6 +49,48 @@ const schema = new Schema({
     }
   })
 })
+
+/**
+ * Minimal stand-in for the `NodeRangeSelection` that `@tiptap/extension-node-range`
+ * registers via `Selection.jsonID('nodeRange', …)`. y-tiptap reconstructs node range
+ * selections through ProseMirror's selection registry (`Selection.fromJSON`) rather than
+ * importing the extension, so registering this here lets us exercise that code path.
+ */
+class NodeRangeSelection extends Selection {
+  /**
+   * @param {import('prosemirror-model').ResolvedPos} $anchor
+   * @param {import('prosemirror-model').ResolvedPos} $head
+   * @param {number} depth
+   */
+  constructor ($anchor, $head, depth) {
+    super($anchor, $head)
+    this.depth = depth
+  }
+
+  map (doc, mapping) {
+    return new NodeRangeSelection(
+      doc.resolve(mapping.map(this.anchor)),
+      doc.resolve(mapping.map(this.head)),
+      this.depth
+    )
+  }
+
+  eq (other) {
+    return other instanceof NodeRangeSelection &&
+      other.anchor === this.anchor &&
+      other.head === this.head &&
+      other.depth === this.depth
+  }
+
+  toJSON () {
+    return { type: 'nodeRange', anchor: this.anchor, head: this.head, depth: this.depth }
+  }
+
+  static fromJSON (doc, json) {
+    return new NodeRangeSelection(doc.resolve(json.anchor), doc.resolve(json.head), json.depth)
+  }
+}
+Selection.jsonID('nodeRange', NodeRangeSelection)
 
 /**
  * Verify that update events in plugins are only fired once.
@@ -1035,6 +1078,64 @@ export const testRestoreSelectionForDeletedBlockNode = async (_tc) => {
   t.assert(
     sel instanceof NodeSelection,
     'selection should be a NodeSelection for block node'
+  )
+}
+
+/**
+ * A NodeRangeSelection (e.g. an active drag-handle drag) must survive a remote Yjs
+ * update instead of being downgraded to a TextSelection. Regression test for TT-608,
+ * where the downgrade caused collaborative drags to duplicate the dragged block.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testRestoreNodeRangeSelectionOnRemoteUpdate = (_tc) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+  const view1 = createNewProsemirrorView(ydoc1)
+  const view2 = createNewProsemirrorView(ydoc2)
+
+  // three top-level paragraphs, authored on peer 1
+  view1.dispatch(
+    view1.state.tr.insert(0, [
+      schema.node('paragraph', undefined, schema.text('one')),
+      schema.node('paragraph', undefined, schema.text('two')),
+      schema.node('paragraph', undefined, schema.text('three'))
+    ])
+  )
+  // sync both peers to the same content
+  Y.applyUpdate(ydoc2, Y.encodeStateAsUpdate(ydoc1))
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  // peer 1 selects a range of block nodes (paragraphs 1 + 2) at depth 0
+  const doc1 = view1.state.doc
+  const head = doc1.child(0).nodeSize + doc1.child(1).nodeSize
+  view1.dispatch(
+    view1.state.tr.setSelection(
+      new NodeRangeSelection(doc1.resolve(0), doc1.resolve(head), 0)
+    )
+  )
+  t.assert(
+    view1.state.selection instanceof NodeRangeSelection,
+    'precondition: peer 1 holds a NodeRangeSelection'
+  )
+
+  // peer 2 makes an inline edit in the last paragraph (a concurrent remote change)
+  const editPos = view2.state.doc.content.size - 1
+  view2.dispatch(view2.state.tr.insertText('!', editPos, editPos))
+
+  // deliver peer 2's change to peer 1 -> triggers restoreRelativeSelection on peer 1
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  const sel = view1.state.selection
+  t.assert(
+    sel instanceof NodeRangeSelection,
+    'NodeRangeSelection should be preserved across a remote update, not downgraded'
+  )
+  t.assert(
+    /** @type {any} */ (sel).depth === 0,
+    'the selection depth should be preserved'
   )
 }
 

@@ -4,7 +4,7 @@
 
 import { createMutex } from 'lib0/mutex'
 import * as PModel from 'prosemirror-model'
-import { AllSelection, Plugin, TextSelection, NodeSelection } from "prosemirror-state"; // eslint-disable-line
+import { AllSelection, Plugin, Selection, TextSelection, NodeSelection } from "prosemirror-state"; // eslint-disable-line
 import * as math from 'lib0/math'
 import * as object from 'lib0/object'
 import * as set from 'lib0/set'
@@ -258,6 +258,23 @@ const restoreRelativeSelection = (tr, relSel, binding) => {
         binding.mapping
       )
       tr.setSelection(createSafeNodeSelection(tr, anchor))
+    } else if (relSel.type === 'nodeRange') {
+      const anchor = relativePositionToAbsolutePosition(
+        binding.doc,
+        binding.type,
+        relSel.anchor,
+        binding.mapping
+      )
+      const head = relativePositionToAbsolutePosition(
+        binding.doc,
+        binding.type,
+        relSel.head,
+        binding.mapping
+      )
+      const selection = createSafeNodeRangeSelection(tr, anchor, head, relSel.depth)
+      if (selection !== null) {
+        tr.setSelection(selection)
+      }
     } else {
       const anchor = relativePositionToAbsolutePosition(
         binding.doc,
@@ -296,22 +313,61 @@ const createSafeNodeSelection = (tr, pos) => {
 }
 
 /**
+ * @param {import('prosemirror-state').Transaction} tr
+ * @param {number|null} anchor
+ * @param {number|null} head
+ * @param {number|undefined} depth
+ * @returns {import('prosemirror-state').Selection|null}
+ *
+ * Reconstructs a NodeRangeSelection (registered by `@tiptap/extension-node-range`
+ * via `Selection.jsonID('nodeRange', …)`) from absolute positions, without taking a
+ * dependency on that package. Falls back to a TextSelection if the range is empty or
+ * the selection type is not registered.
+ */
+const createSafeNodeRangeSelection = (tr, anchor, head, depth) => {
+  if (anchor === null || head === null) {
+    return null
+  }
+  const clampedAnchor = Math.min(Math.max(anchor, 0), tr.doc.content.size)
+  const clampedHead = Math.min(Math.max(head, 0), tr.doc.content.size)
+  try {
+    const selection = Selection.fromJSON(tr.doc, {
+      type: 'nodeRange',
+      anchor: clampedAnchor,
+      head: clampedHead,
+      depth
+    })
+    if (!selection.ranges.length) {
+      return TextSelection.near(tr.doc.resolve(clampedAnchor))
+    }
+    return selection
+  } catch (e) {
+    return TextSelection.near(tr.doc.resolve(clampedAnchor))
+  }
+}
+
+/**
  * @param {ProsemirrorBinding} pmbinding
  * @param {import('prosemirror-state').EditorState} state
  */
-export const getRelativeSelection = (pmbinding, state) => ({
-  type: /** @type {any} */ (state.selection).jsonID,
-  anchor: absolutePositionToRelativePosition(
-    state.selection.anchor,
-    pmbinding.type,
-    pmbinding.mapping
-  ),
-  head: absolutePositionToRelativePosition(
-    state.selection.head,
-    pmbinding.type,
-    pmbinding.mapping
-  )
-})
+export const getRelativeSelection = (pmbinding, state) => {
+  const type = /** @type {any} */ (state.selection).jsonID
+  return {
+    type,
+    // `depth` is only meaningful for NodeRangeSelection; undefined for every other type.
+    depth: type === 'nodeRange' ? /** @type {any} */ (state.selection).depth : undefined,
+    anchor: absolutePositionToRelativePosition(
+      state.selection.anchor,
+      pmbinding.type,
+      pmbinding.mapping
+    ),
+    head: absolutePositionToRelativePosition(
+      state.selection.head,
+      pmbinding.type,
+      pmbinding.mapping
+    )
+  }
+}
 
 /**
  * Binding for prosemirror.
