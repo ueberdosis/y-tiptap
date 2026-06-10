@@ -257,7 +257,11 @@ const restoreRelativeSelection = (tr, relSel, binding) => {
         relSel.anchor,
         binding.mapping
       )
-      tr.setSelection(createSafeNodeSelection(tr, anchor))
+      // anchor is null when the referenced node was deleted or moved out of
+      // binding.type by a remote update; resolving null would throw.
+      if (anchor !== null) {
+        tr.setSelection(createSafeNodeSelection(tr, anchor))
+      }
     } else if (relSel.type === 'nodeRange') {
       const anchor = relativePositionToAbsolutePosition(
         binding.doc,
