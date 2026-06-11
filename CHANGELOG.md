@@ -1,5 +1,12 @@
 # @tiptap/y-tiptap
 
+## 3.0.5
+
+### Patch Changes
+
+- 9f2d091: Fixed Recieving null from `mapping.get(t)` or `mapping.get(contentType)` in `relativePositionToAbsolutePosition` return `null` instead of failing. It fails because position is taken from `nodeSize` on the returned entry, without catching the case of the lookup on `mapping` returning null.
+- b146586: Fix duplicated blocks when dragging with the drag handle during collaborative editing. Node range selections are now preserved across remote updates instead of being reset, so dropping a block moves it instead of leaving a copy behind. Also hardens node selection restore so a remote update that removes the selected node can no longer throw.
+
 ## 3.0.4
 
 ### Patch Changes
