@@ -247,7 +247,11 @@ export const relativePositionToAbsolutePosition = (y, documentType, relPos, mapp
         if (t instanceof Y.XmlText) {
           pos += t._length
         } else {
-          pos += /** @type {any} */ (mapping.get(t)).nodeSize
+          const mapped = mapping.get(t)
+          if (mapped == null) {
+            return null
+          }
+          pos += /** @type {any} */ (mapped).nodeSize
         }
       }
       n = /** @type {Y.Item} */ (n.right)
@@ -271,7 +275,11 @@ export const relativePositionToAbsolutePosition = (y, documentType, relPos, mapp
           if (contentType instanceof Y.XmlText) {
             pos += contentType._length
           } else {
-            pos += /** @type {any} */ (mapping.get(contentType)).nodeSize
+            const mapped = mapping.get(contentType)
+            if (mapped == null) {
+              return null
+            }
+            pos += /** @type {any} */ (mapped).nodeSize
           }
         }
         n = n.right
