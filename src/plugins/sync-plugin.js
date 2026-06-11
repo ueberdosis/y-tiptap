@@ -4,7 +4,7 @@
 
 import { createMutex } from 'lib0/mutex'
 import * as PModel from 'prosemirror-model'
-import { AllSelection, Plugin, TextSelection, NodeSelection } from "prosemirror-state"; // eslint-disable-line
+import { AllSelection, Plugin, Selection, TextSelection, NodeSelection } from "prosemirror-state"; // eslint-disable-line
 import * as math from 'lib0/math'
 import * as object from 'lib0/object'
 import * as set from 'lib0/set'
@@ -257,7 +257,28 @@ const restoreRelativeSelection = (tr, relSel, binding) => {
         relSel.anchor,
         binding.mapping
       )
-      tr.setSelection(createSafeNodeSelection(tr, anchor))
+      // anchor is null when the referenced node was deleted or moved out of
+      // binding.type by a remote update; resolving null would throw.
+      if (anchor !== null) {
+        tr.setSelection(createSafeNodeSelection(tr, anchor))
+      }
+    } else if (relSel.type === 'nodeRange') {
+      const anchor = relativePositionToAbsolutePosition(
+        binding.doc,
+        binding.type,
+        relSel.anchor,
+        binding.mapping
+      )
+      const head = relativePositionToAbsolutePosition(
+        binding.doc,
+        binding.type,
+        relSel.head,
+        binding.mapping
+      )
+      const selection = createSafeNodeRangeSelection(tr, anchor, head, relSel.depth)
+      if (selection !== null) {
+        tr.setSelection(selection)
+      }
     } else {
       const anchor = relativePositionToAbsolutePosition(
         binding.doc,
@@ -296,22 +317,64 @@ const createSafeNodeSelection = (tr, pos) => {
 }
 
 /**
+ * Safely reconstructs a NodeRangeSelection from resolved absolute positions.
+ *
+ * @param {import('prosemirror-state').Transaction} tr - The transaction whose document provides resolved positions.
+ * @param {number|null} anchor - Absolute document position marking the start (boundary) of the node range.
+ *        Use `relativePositionToAbsolutePosition` before calling this function.
+ * @param {number|null} head - Absolute document position marking the end (boundary) of the node range.
+ *        Use `relativePositionToAbsolutePosition` before calling this function.
+ * @param {number|undefined} depth - The nesting depth at which the range operates (e.g. 0 for
+ *        top-level blocks, 1 for blocks nested inside a wrapper). Passed through to
+ *        `Selection.fromJSON`; ignored by `@tiptap/extension-node-range` < v2.29 but
+ *        properly stored starting from that version.
+ * @returns {import('prosemirror-state').Selection|null} Reconstructed selection, or null if
+ *          anchor/head could not be resolved.
+ */
+const createSafeNodeRangeSelection = (tr, anchor, head, depth) => {
+  if (anchor === null || head === null) {
+    return null
+  }
+  const clampedAnchor = Math.min(Math.max(anchor, 0), tr.doc.content.size)
+  const clampedHead = Math.min(Math.max(head, 0), tr.doc.content.size)
+  try {
+    const selection = Selection.fromJSON(tr.doc, {
+      type: 'nodeRange',
+      anchor: clampedAnchor,
+      head: clampedHead,
+      depth
+    })
+    if (!selection.ranges.length) {
+      return TextSelection.near(tr.doc.resolve(clampedAnchor))
+    }
+    return selection
+  } catch (e) {
+    return TextSelection.near(tr.doc.resolve(clampedAnchor))
+  }
+}
+
+/**
  * @param {ProsemirrorBinding} pmbinding
  * @param {import('prosemirror-state').EditorState} state
  */
-export const getRelativeSelection = (pmbinding, state) => ({
-  type: /** @type {any} */ (state.selection).jsonID,
-  anchor: absolutePositionToRelativePosition(
-    state.selection.anchor,
-    pmbinding.type,
-    pmbinding.mapping
-  ),
-  head: absolutePositionToRelativePosition(
-    state.selection.head,
-    pmbinding.type,
-    pmbinding.mapping
-  )
-})
+export const getRelativeSelection = (pmbinding, state) => {
+  const type = /** @type {any} */ (state.selection).jsonID
+  return {
+    type,
+    // `depth` is only meaningful for NodeRangeSelection; undefined for every other type.
+    depth: type === 'nodeRange' ? /** @type {any} */ (state.selection).depth : undefined,
+    anchor: absolutePositionToRelativePosition(
+      state.selection.anchor,
+      pmbinding.type,
+      pmbinding.mapping
+    ),
+    head: absolutePositionToRelativePosition(
+      state.selection.head,
+      pmbinding.type,
+      pmbinding.mapping
+    )
+  }
+}
 
 /**
  * Binding for prosemirror.
