@@ -317,16 +317,19 @@ const createSafeNodeSelection = (tr, pos) => {
 }
 
 /**
- * @param {import('prosemirror-state').Transaction} tr
- * @param {number|null} anchor
- * @param {number|null} head
- * @param {number|undefined} depth
- * @returns {import('prosemirror-state').Selection|null}
+ * Safely reconstructs a NodeRangeSelection from resolved absolute positions.
  *
- * Reconstructs a NodeRangeSelection (registered by `@tiptap/extension-node-range`
- * via `Selection.jsonID('nodeRange', …)`) from absolute positions, without taking a
- * dependency on that package. Falls back to a TextSelection if the range is empty or
- * the selection type is not registered.
+ * @param {import('prosemirror-state').Transaction} tr - The transaction whose document provides resolved positions.
+ * @param {number|null} anchor - Absolute document position marking the start (boundary) of the node range.
+ *        Use `relativePositionToAbsolutePosition` before calling this function.
+ * @param {number|null} head - Absolute document position marking the end (boundary) of the node range.
+ *        Use `relativePositionToAbsolutePosition` before calling this function.
+ * @param {number|undefined} depth - The nesting depth at which the range operates (e.g. 0 for
+ *        top-level blocks, 1 for blocks nested inside a wrapper). Passed through to
+ *        `Selection.fromJSON`; ignored by `@tiptap/extension-node-range` < v2.29 but
+ *        properly stored starting from that version.
+ * @returns {import('prosemirror-state').Selection|null} Reconstructed selection, or null if
+ *          anchor/head could not be resolved.
  */
 const createSafeNodeRangeSelection = (tr, anchor, head, depth) => {
   if (anchor === null || head === null) {
