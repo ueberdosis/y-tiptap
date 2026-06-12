@@ -514,9 +514,26 @@ export function yXmlFragmentToProsemirrorJSON (xmlFragment) {
         type: item.nodeName
       }
 
-      const attrs = item.getAttributes()
+      const allAttrs = item.getAttributes()
+      const attrs = {}
+      const marks = []
+      for (const key in allAttrs) {
+        if (key.startsWith('__mark_')) {
+          const markName = yattr2markname(key.slice(7))
+          const mark = { type: markName }
+          if (Object.keys(allAttrs[key]).length) {
+            mark.attrs = allAttrs[key]
+          }
+          marks.push(mark)
+        } else {
+          attrs[key] = allAttrs[key]
+        }
+      }
       if (Object.keys(attrs).length) {
         response.attrs = attrs
+      }
+      if (marks.length) {
+        response.marks = marks
       }
 
       const children = item.toArray()

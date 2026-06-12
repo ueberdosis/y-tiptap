@@ -877,7 +877,18 @@ export const createNodeFromYElement = (
           : { type: 'added' }
       }
     }
-    const node = schema.node(el.nodeName, attrs, children)
+    /** @type {Array<import('prosemirror-model').Mark>} */
+    const marks = []
+    for (const key in attrs) {
+      if (key.startsWith('__mark_')) {
+        const markName = yattr2markname(key.slice(7))
+        if (schema.marks[markName]) {
+          marks.push(schema.mark(markName, attrs[key]))
+          delete attrs[key]
+        }
+      }
+    }
+    const node = schema.node(el.nodeName, attrs, children, marks)
     meta.mapping.set(el, node)
     return node
   } catch (e) {
@@ -957,6 +968,10 @@ const createTypeFromElementNode = (node, meta) => {
     if (val !== null && key !== 'ychange') {
       type.setAttribute(key, val)
     }
+  }
+  const pMarkAttrs = marksToAttributes(node.marks, meta)
+  for (const key in pMarkAttrs) {
+    type.setAttribute(`__mark_${key}`, Object.assign({}, pMarkAttrs[key]))
   }
   type.insert(
     0,
@@ -1060,17 +1075,34 @@ const equalYTextPText = (ytext, ptexts) => {
 /**
  * @param {Y.XmlElement|Y.XmlText|Y.XmlHook} ytype
  * @param {any|Array<any>} pnode
+ * @param {BindingMetadata} [meta]
  */
-const equalYTypePNode = (ytype, pnode) => {
+const equalYTypePNode = (ytype, pnode, meta) => {
   if (
     ytype instanceof Y.XmlElement && !(pnode instanceof Array) &&
     matchNodeName(ytype, pnode)
   ) {
     const normalizedContent = normalizePNodeContent(pnode)
+    const yAttrs = ytype.getAttributes()
+    const yRegularAttrs = {}
+    const yMarkAttrs = {}
+    for (const key in yAttrs) {
+      if (key.startsWith('__mark_')) {
+        yMarkAttrs[key] = yAttrs[key]
+      } else {
+        yRegularAttrs[key] = yAttrs[key]
+      }
+    }
+    const pMarkAttrs = meta ? marksToAttributes(pnode.marks, meta) : {}
+    const pMarkPrefixedAttrs = {}
+    for (const key in pMarkAttrs) {
+      pMarkPrefixedAttrs[`__mark_${key}`] = pMarkAttrs[key]
+    }
     return ytype._length === normalizedContent.length &&
-      equalAttrs(ytype.getAttributes(), pnode.attrs) &&
+      equalAttrs(yRegularAttrs, pnode.attrs) &&
+      equalAttrs(pMarkPrefixedAttrs, yMarkAttrs) &&
       ytype.toArray().every((ychild, i) =>
-        equalYTypePNode(ychild, normalizedContent[i])
+        equalYTypePNode(ychild, normalizedContent[i], meta)
       )
   }
   return ytype instanceof Y.XmlText && pnode instanceof Array &&
@@ -1108,7 +1140,7 @@ const computeChildEqualityFactor = (ytype, pnode, meta) => {
     const leftP = pChildren[left]
     if (mappedIdentity(meta.mapping.get(leftY), leftP)) {
       foundMappedChild = true // definite (good) match!
-    } else if (!equalYTypePNode(leftY, leftP)) {
+    } else if (!equalYTypePNode(leftY, leftP, meta)) {
       break
     }
   }
@@ -1117,7 +1149,7 @@ const computeChildEqualityFactor = (ytype, pnode, meta) => {
     const rightP = pChildren[pChildCnt - right - 1]
     if (mappedIdentity(meta.mapping.get(rightY), rightP)) {
       foundMappedChild = true
-    } else if (!equalYTypePNode(rightY, rightP)) {
+    } else if (!equalYTypePNode(rightY, rightP, meta)) {
       break
     }
   }
@@ -1251,10 +1283,24 @@ export const updateYFragment = (y, yDomFragment, pNode, meta) => {
         yDomFragment.removeAttribute(key)
       }
     }
+    // update mark attributes
+    const pMarkAttrs = marksToAttributes(pNode.marks, meta)
+    for (const key in pMarkAttrs) {
+      yDomFragment.setAttribute(`__mark_${key}`, Object.assign({}, pMarkAttrs[key]))
+    }
     // remove all keys that are no longer in pAttrs
     for (const key in yDomAttrs) {
-      if (pAttrs[key] === undefined) {
+      if (pAttrs[key] === undefined && !key.startsWith('__mark_')) {
         yDomFragment.removeAttribute(key)
+      }
+    }
+    // remove mark attrs that are no longer present
+    for (const key in yDomAttrs) {
+      if (key.startsWith('__mark_')) {
+        const markKey = key.slice(7)
+        if (pMarkAttrs[markKey] === undefined) {
+          yDomFragment.removeAttribute(key)
+        }
       }
     }
   }
@@ -1271,7 +1317,7 @@ export const updateYFragment = (y, yDomFragment, pNode, meta) => {
     const leftY = yChildren[left]
     const leftP = pChildren[left]
     if (!mappedIdentity(meta.mapping.get(leftY), leftP)) {
-      if (equalYTypePNode(leftY, leftP)) {
+      if (equalYTypePNode(leftY, leftP, meta)) {
         // update mapping
         meta.mapping.set(leftY, leftP)
       } else {
@@ -1284,7 +1330,7 @@ export const updateYFragment = (y, yDomFragment, pNode, meta) => {
     const rightY = yChildren[yChildCnt - right - 1]
     const rightP = pChildren[pChildCnt - right - 1]
     if (!mappedIdentity(meta.mapping.get(rightY), rightP)) {
-      if (equalYTypePNode(rightY, rightP)) {
+      if (equalYTypePNode(rightY, rightP, meta)) {
         // update mapping
         meta.mapping.set(rightY, rightP)
       } else {

@@ -1188,3 +1188,515 @@ export const testRepeatGenerateProsemirrorChanges300 = tc => {
   checkResult(applyRandomTests(tc, pmChanges, 300, createNewProsemirrorView))
 }
 */
+
+// --- Tests for marks on inline atom nodes (TT-634) ---
+
+const schemaWithInlineAtomMarks = new Schema({
+  nodes: Object.assign({}, basicSchema.nodes, {
+    inlineatom: {
+      inline: true,
+      group: 'inline',
+      atom: true,
+      marks: '_',
+      parseDOM: [{ tag: 'inline-atom' }],
+      toDOM () {
+        return ['inline-atom']
+      }
+    },
+    // An inline atom that carries its own attribute, used to prove that node
+    // attributes and node marks round-trip independently without colliding.
+    labeledatom: {
+      inline: true,
+      group: 'inline',
+      atom: true,
+      marks: '_',
+      attrs: { label: { default: null } },
+      parseDOM: [{ tag: 'labeled-atom' }],
+      toDOM (node) {
+        return ['labeled-atom', { label: node.attrs.label }]
+      }
+    }
+  }),
+  marks: Object.assign({}, basicSchema.marks, {
+    comment: {
+      attrs: {
+        id: { default: null }
+      },
+      excludes: '',
+      parseDOM: [{ tag: 'comment' }],
+      toDOM (node) {
+        return ['comment', { comment_id: node.attrs.id }]
+      }
+    }
+  })
+})
+
+/**
+ * @param {t.TestCase} _tc
+ */
+export const testMarksOnInlineAtomRoundTrip = (_tc) => {
+  const view = new EditorView(null, {
+    state: EditorState.create({
+      schema: schemaWithInlineAtomMarks,
+      plugins: []
+    })
+  })
+
+  view.dispatch(
+    view.state.tr.insert(
+      0,
+      schemaWithInlineAtomMarks.node('paragraph', undefined, [
+        schemaWithInlineAtomMarks.node('inlineatom', undefined, undefined, [
+          schemaWithInlineAtomMarks.mark('strong')
+        ])
+      ])
+    )
+  )
+
+  const stateJSON = JSON.parse(JSON.stringify(view.state.doc.toJSON()))
+  const ydoc = prosemirrorJSONToYDoc(/** @type {any} */ (schemaWithInlineAtomMarks), stateJSON)
+  const backandforth = yDocToProsemirrorJSON(ydoc)
+  t.compare(stateJSON, backandforth)
+}
+
+/**
+ * @param {t.TestCase} _tc
+ */
+export const testMarksOnInlineAtomOverlapping = (_tc) => {
+  const view = new EditorView(null, {
+    state: EditorState.create({
+      schema: schemaWithInlineAtomMarks,
+      plugins: []
+    })
+  })
+
+  view.dispatch(
+    view.state.tr.insert(
+      0,
+      schemaWithInlineAtomMarks.node('paragraph', undefined, [
+        schemaWithInlineAtomMarks.node('inlineatom', undefined, undefined, [
+          schemaWithInlineAtomMarks.mark('comment', { id: 1 }),
+          schemaWithInlineAtomMarks.mark('comment', { id: 2 })
+        ])
+      ])
+    )
+  )
+
+  const stateJSON = JSON.parse(JSON.stringify(view.state.doc.toJSON()))
+  const ydoc = prosemirrorJSONToYDoc(/** @type {any} */ (schemaWithInlineAtomMarks), stateJSON)
+  const backandforth = yDocToProsemirrorJSON(ydoc)
+  t.compare(stateJSON, backandforth)
+}
+
+/**
+ * @param {t.TestCase} _tc
+ */
+export const testMarksOnInlineAtomMultipleMarks = (_tc) => {
+  const view = new EditorView(null, {
+    state: EditorState.create({
+      schema: schemaWithInlineAtomMarks,
+      plugins: []
+    })
+  })
+
+  view.dispatch(
+    view.state.tr.insert(
+      0,
+      schemaWithInlineAtomMarks.node('paragraph', undefined, [
+        schemaWithInlineAtomMarks.node('inlineatom', undefined, undefined, [
+          schemaWithInlineAtomMarks.mark('strong'),
+          schemaWithInlineAtomMarks.mark('em')
+        ])
+      ])
+    )
+  )
+
+  const stateJSON = JSON.parse(JSON.stringify(view.state.doc.toJSON()))
+  const ydoc = prosemirrorJSONToYDoc(/** @type {any} */ (schemaWithInlineAtomMarks), stateJSON)
+  const backandforth = yDocToProsemirrorJSON(ydoc)
+  t.compare(stateJSON, backandforth)
+}
+
+/**
+ * @param {t.TestCase} _tc
+ */
+export const testMarksOnInlineAtomSync = (_tc) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+
+  const view1 = createNewProsemirrorViewWithSchema(ydoc1, schemaWithInlineAtomMarks)
+  const view2 = createNewProsemirrorViewWithSchema(ydoc2, schemaWithInlineAtomMarks)
+
+  // Insert inline atom with bold mark on peer 1
+  view1.dispatch(
+    view1.state.tr.insert(
+      0,
+      schemaWithInlineAtomMarks.node('paragraph', undefined, [
+        schemaWithInlineAtomMarks.node('inlineatom', undefined, undefined, [
+          schemaWithInlineAtomMarks.mark('strong')
+        ])
+      ])
+    )
+  )
+
+  // Sync to peer 2
+  Y.applyUpdate(ydoc2, Y.encodeStateAsUpdate(ydoc1))
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  // Verify peer 2 has the mark
+  const para = view2.state.doc.child(0)
+  let pos = 1
+  for (let i = 0; i < para.childCount; i++) {
+    const child = para.child(i)
+    if (child.type.name === 'inlineatom') break
+    pos += child.nodeSize
+  }
+  const node = view2.state.doc.nodeAt(pos)
+  t.assert(node !== null, 'inline atom node exists')
+  t.assert(
+    node.marks.some(m => m.type.name === 'strong'),
+    'peer 2 should have strong mark on inline atom'
+  )
+}
+
+/**
+ * @param {t.TestCase} _tc
+ */
+export const testMarksOnInlineAtomRemoval = (_tc) => {
+  const ydoc = new Y.Doc()
+  const view = createNewProsemirrorViewWithSchema(ydoc, schemaWithInlineAtomMarks)
+
+  // Insert inline atom with bold mark
+  view.dispatch(
+    view.state.tr.insert(
+      0,
+      schemaWithInlineAtomMarks.node('paragraph', undefined, [
+        schemaWithInlineAtomMarks.node('inlineatom', undefined, undefined, [
+          schemaWithInlineAtomMarks.mark('strong')
+        ])
+      ])
+    )
+  )
+
+  // Verify Yjs has the mark
+  const yxml = ydoc.get('prosemirror')
+  const inlineAtomY = yxml.get(0).get(0)
+  t.assert(inlineAtomY.getAttributes().__mark_strong !== undefined, 'Yjs should have __mark_strong attr')
+
+  // Remove the mark
+  const $pos = view.state.doc.resolve(1)
+  const node = $pos.nodeAfter
+  const newNode = node.type.create(
+    node.attrs,
+    node.content,
+    node.marks.filter(m => m.type.name !== 'strong')
+  )
+  view.dispatch(view.state.tr.replaceWith(1, 1 + node.nodeSize, newNode))
+
+  // Verify Yjs no longer has __mark_strong
+  const attrs = inlineAtomY.getAttributes()
+  t.assert(attrs.__mark_strong === undefined, 'Yjs should not have __mark_strong after removal')
+}
+
+/**
+ * @param {t.TestCase} _tc
+ */
+export const testMarksOnInlineAtomNoMarks = (_tc) => {
+  const view = new EditorView(null, {
+    state: EditorState.create({
+      schema: schemaWithInlineAtomMarks,
+      plugins: []
+    })
+  })
+
+  view.dispatch(
+    view.state.tr.insert(
+      0,
+      schemaWithInlineAtomMarks.node('paragraph', undefined, [
+        schemaWithInlineAtomMarks.node('inlineatom')
+      ])
+    )
+  )
+
+  const stateJSON = JSON.parse(JSON.stringify(view.state.doc.toJSON()))
+  const ydoc = prosemirrorJSONToYDoc(/** @type {any} */ (schemaWithInlineAtomMarks), stateJSON)
+  const backandforth = yDocToProsemirrorJSON(ydoc)
+  t.compare(stateJSON, backandforth)
+
+  // Verify no __mark_ attrs in Yjs
+  const yxml = ydoc.get('prosemirror')
+  const inlineAtomY = yxml.get(0).get(0)
+  const attrs = inlineAtomY.getAttributes()
+  const hasMarkAttrs = Object.keys(attrs).some(k => k.startsWith('__mark_'))
+  t.assert(!hasMarkAttrs, 'no __mark_ attrs should be present when node has no marks')
+}
+
+/**
+ * Marks on an unrelated, untouched node must survive when a different part of
+ * the document is edited. Guards against incremental diffing dropping or
+ * recreating marked nodes during everyday editing.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testMarksOnInlineAtomPreservedAcrossUnrelatedEdit = (_tc) => {
+  const ydoc = new Y.Doc()
+  const view = createNewProsemirrorViewWithSchema(ydoc, schemaWithInlineAtomMarks)
+
+  // First paragraph holds the marked inline atom, second holds plain text.
+  view.dispatch(
+    view.state.tr.insert(
+      0,
+      [
+        schemaWithInlineAtomMarks.node('paragraph', undefined, [
+          schemaWithInlineAtomMarks.node('inlineatom', undefined, undefined, [
+            schemaWithInlineAtomMarks.mark('strong')
+          ])
+        ]),
+        schemaWithInlineAtomMarks.node('paragraph', undefined, [
+          schemaWithInlineAtomMarks.text('world')
+        ])
+      ]
+    )
+  )
+
+  const yxml = ydoc.get('prosemirror')
+  t.assert(
+    yxml.get(0).get(0).getAttributes().__mark_strong !== undefined,
+    'Yjs should have __mark_strong attr before the edit'
+  )
+
+  // Edit only the second paragraph — append "!" to "world".
+  view.dispatch(view.state.tr.insertText('!', view.state.doc.content.size - 1))
+
+  t.assert(
+    yxml.get(0).get(0).getAttributes().__mark_strong !== undefined,
+    'Yjs should still have __mark_strong attr after the unrelated edit'
+  )
+  const node = view.state.doc.child(0).child(0)
+  t.assert(
+    node.type.name === 'inlineatom' && node.marks.some(m => m.type.name === 'strong'),
+    'inline atom should still carry the strong mark after the unrelated edit'
+  )
+}
+
+/**
+ * The mark's *attribute values* — not just its presence — must round-trip
+ * through the real collaboration binding (createNodeFromYElement), not only the
+ * JSON conversion helpers.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testMarkWithAttrsThroughSync = (_tc) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+
+  const view1 = createNewProsemirrorViewWithSchema(ydoc1, schemaWithInlineAtomMarks)
+  const view2 = createNewProsemirrorViewWithSchema(ydoc2, schemaWithInlineAtomMarks)
+
+  view1.dispatch(
+    view1.state.tr.insert(
+      0,
+      schemaWithInlineAtomMarks.node('paragraph', undefined, [
+        schemaWithInlineAtomMarks.node('inlineatom', undefined, undefined, [
+          schemaWithInlineAtomMarks.mark('comment', { id: 42 })
+        ])
+      ])
+    )
+  )
+
+  Y.applyUpdate(ydoc2, Y.encodeStateAsUpdate(ydoc1))
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  const node = view2.state.doc.child(0).child(0)
+  t.assert(node.type.name === 'inlineatom', 'peer 2 has the inline atom')
+  const comment = node.marks.find(m => m.type.name === 'comment')
+  t.assert(comment !== undefined, 'peer 2 has the comment mark')
+  t.assert(comment.attrs.id === 42, 'peer 2 preserves the comment mark attrs')
+}
+
+/**
+ * Overlapping marks (those that do not exclude themselves) must each survive a
+ * round trip through the binding with their distinct attribute values, using
+ * the hashed `__mark_name--HASH` attribute keys.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testOverlappingMarksThroughSync = (_tc) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+
+  const view1 = createNewProsemirrorViewWithSchema(ydoc1, schemaWithInlineAtomMarks)
+  const view2 = createNewProsemirrorViewWithSchema(ydoc2, schemaWithInlineAtomMarks)
+
+  view1.dispatch(
+    view1.state.tr.insert(
+      0,
+      schemaWithInlineAtomMarks.node('paragraph', undefined, [
+        schemaWithInlineAtomMarks.node('inlineatom', undefined, undefined, [
+          schemaWithInlineAtomMarks.mark('comment', { id: 1 }),
+          schemaWithInlineAtomMarks.mark('comment', { id: 2 })
+        ])
+      ])
+    )
+  )
+
+  // Two distinct hashed mark attributes should be stored on peer 1.
+  const markKeys1 = Object.keys(ydoc1.get('prosemirror').get(0).get(0).getAttributes())
+    .filter(k => k.startsWith('__mark_'))
+  t.assert(markKeys1.length === 2, 'two distinct hashed mark attrs are stored')
+
+  Y.applyUpdate(ydoc2, Y.encodeStateAsUpdate(ydoc1))
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  const node = view2.state.doc.child(0).child(0)
+  const ids = node.marks.filter(m => m.type.name === 'comment').map(m => m.attrs.id).sort()
+  t.compare(ids, [1, 2])
+}
+
+/**
+ * Changing a mark's attributes on an existing node must update the Yjs document
+ * in place: the stale hashed attribute is removed and the new one added, with no
+ * orphaned `__mark_` attributes left behind. Exercises the mark add/remove loops
+ * in `updateYFragment` and the mark-aware equality check in `equalYTypePNode`.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testMarkAttrChangePropagates = (_tc) => {
+  const ydoc = new Y.Doc()
+  const view = createNewProsemirrorViewWithSchema(ydoc, schemaWithInlineAtomMarks)
+
+  view.dispatch(
+    view.state.tr.insert(
+      0,
+      schemaWithInlineAtomMarks.node('paragraph', undefined, [
+        schemaWithInlineAtomMarks.node('inlineatom', undefined, undefined, [
+          schemaWithInlineAtomMarks.mark('comment', { id: 1 })
+        ])
+      ])
+    )
+  )
+
+  const yxml = ydoc.get('prosemirror')
+  const keyBefore = Object.keys(yxml.get(0).get(0).getAttributes())
+    .find(k => k.startsWith('__mark_comment'))
+  t.assert(keyBefore !== undefined, 'a hashed comment mark attr exists before the change')
+
+  // Replace the inline atom, swapping the comment id from 1 to 2.
+  const node = view.state.doc.nodeAt(1)
+  const newNode = node.type.create(
+    node.attrs,
+    node.content,
+    [schemaWithInlineAtomMarks.mark('comment', { id: 2 })]
+  )
+  view.dispatch(view.state.tr.replaceWith(1, 1 + node.nodeSize, newNode))
+
+  const attrsAfter = yxml.get(0).get(0).getAttributes()
+  const markKeysAfter = Object.keys(attrsAfter).filter(k => k.startsWith('__mark_'))
+  t.assert(markKeysAfter.length === 1, 'exactly one mark attr remains after the change')
+  t.assert(attrsAfter[keyBefore] === undefined, 'the stale hashed mark attr was removed')
+  t.assert(markKeysAfter[0] !== keyBefore, 'the remaining mark attr is the new (rehashed) one')
+
+  // The change survives a full round trip back to ProseMirror.
+  const roundTripped = yDocToProsemirrorJSON(ydoc)
+  const recoveredMarks = roundTripped.content[0].content[0].marks
+  t.compare(recoveredMarks, [{ type: 'comment', attrs: { id: 2 } }])
+}
+
+/**
+ * Node attributes and node marks must round-trip independently: a plain
+ * attribute is stored unprefixed, the mark is stored under `__mark_`, and
+ * neither leaks into the other on the way back to ProseMirror.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testMarkAndAttrCoexist = (_tc) => {
+  const view = new EditorView(null, {
+    state: EditorState.create({
+      schema: schemaWithInlineAtomMarks,
+      plugins: []
+    })
+  })
+
+  view.dispatch(
+    view.state.tr.insert(
+      0,
+      schemaWithInlineAtomMarks.node('paragraph', undefined, [
+        schemaWithInlineAtomMarks.node('labeledatom', { label: 'hello' }, undefined, [
+          schemaWithInlineAtomMarks.mark('strong')
+        ])
+      ])
+    )
+  )
+
+  const stateJSON = JSON.parse(JSON.stringify(view.state.doc.toJSON()))
+  const ydoc = prosemirrorJSONToYDoc(/** @type {any} */ (schemaWithInlineAtomMarks), stateJSON)
+
+  // In Yjs the attribute is plain; the mark is prefixed; neither contaminates the other.
+  const attrs = ydoc.get('prosemirror').get(0).get(0).getAttributes()
+  t.assert(attrs.label === 'hello', 'plain attribute is stored unprefixed')
+  t.assert(attrs.__mark_strong !== undefined, 'mark is stored under the __mark_ prefix')
+  t.assert(attrs.__mark_label === undefined, 'the plain attribute was not stored as a mark')
+  t.assert(attrs.strong === undefined, 'the mark was not stored as a plain attribute')
+
+  // The full structure round-trips back to ProseMirror unchanged.
+  const backandforth = yDocToProsemirrorJSON(ydoc)
+  t.compare(stateJSON, backandforth)
+  const recovered = backandforth.content[0].content[0]
+  t.assert(recovered.attrs.label === 'hello', 'recovered node keeps its attribute')
+  t.compare(recovered.marks, [{ type: 'strong' }])
+}
+
+/**
+ * Removing a mark on one peer must propagate the removal to the other peer,
+ * clearing the `__mark_` attribute everywhere — not just locally.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testMarkRemovalPropagatesAcrossSync = (_tc) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+
+  const view1 = createNewProsemirrorViewWithSchema(ydoc1, schemaWithInlineAtomMarks)
+  const view2 = createNewProsemirrorViewWithSchema(ydoc2, schemaWithInlineAtomMarks)
+
+  view1.dispatch(
+    view1.state.tr.insert(
+      0,
+      schemaWithInlineAtomMarks.node('paragraph', undefined, [
+        schemaWithInlineAtomMarks.node('inlineatom', undefined, undefined, [
+          schemaWithInlineAtomMarks.mark('strong')
+        ])
+      ])
+    )
+  )
+
+  Y.applyUpdate(ydoc2, Y.encodeStateAsUpdate(ydoc1))
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+  t.assert(
+    view2.state.doc.child(0).child(0).marks.some(m => m.type.name === 'strong'),
+    'peer 2 receives the mark initially'
+  )
+
+  // Remove the mark on peer 1.
+  const node = view1.state.doc.nodeAt(1)
+  const newNode = node.type.create(node.attrs, node.content, [])
+  view1.dispatch(view1.state.tr.replaceWith(1, 1 + node.nodeSize, newNode))
+
+  Y.applyUpdate(ydoc2, Y.encodeStateAsUpdate(ydoc1))
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  t.assert(
+    !view2.state.doc.child(0).child(0).marks.some(m => m.type.name === 'strong'),
+    'peer 2 no longer has the mark after removal'
+  )
+  const attrs = ydoc2.get('prosemirror').get(0).get(0).getAttributes()
+  t.assert(attrs.__mark_strong === undefined, 'peer 2 Yjs no longer has the __mark_strong attr')
+}
