@@ -294,27 +294,16 @@ const restoreRelativeSelection = (tr, relSel, binding, oldDoc) => {
         relSel.head,
         binding.mapping
       )
-      if ((anchor === null || head === null) && oldDoc != null &&
-          relSel.absAnchor != null && relSel.absHead != null) {
-        anchor = findAbsolutePositionAfterStructuralChange(
-          oldDoc,
-          tr.doc,
-          relSel.absAnchor
-        )
-        head = findAbsolutePositionAfterStructuralChange(
-          oldDoc,
-          tr.doc,
-          relSel.absHead
-        )
-      } else if (
-        oldDoc != null &&
+      const needsContentFallback = oldDoc != null &&
         relSel.absAnchor != null &&
         relSel.absHead != null &&
-        relSel.absAnchor > 1 &&
-        anchor !== null &&
-        head !== null &&
-        anchor <= 1
-      ) {
+        (
+          anchor === null ||
+          head === null ||
+          (relSel.absAnchor > 1 && anchor !== null && anchor <= 1) ||
+          (relSel.absHead > 1 && head !== null && head <= 1)
+        )
+      if (needsContentFallback) {
         anchor = findAbsolutePositionAfterStructuralChange(
           oldDoc,
           tr.doc,

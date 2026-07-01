@@ -1303,6 +1303,119 @@ export const testRemoteCursorSurvivesStructuralChange = (_tc) => {
 }
 
 /**
+ * Content-based fallback must run when only the head misresolves to doc start.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testSelectionFallbackWhenOnlyHeadMisresolves = (_tc) => {
+  const oldDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('hello')),
+    schema.node('paragraph', undefined, schema.text('world'))
+  ])
+  const newDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('world')),
+    schema.node('paragraph', undefined, schema.text('hello'))
+  ])
+
+  const relSel = { absAnchor: 6, absHead: 12 }
+  const resolvedAnchor = 13
+  const resolvedHead = 1
+
+  const oldConditionTriggers =
+    relSel.absAnchor > 1 &&
+    resolvedAnchor !== null &&
+    resolvedHead !== null &&
+    resolvedAnchor <= 1
+  const newConditionTriggers =
+    relSel.absHead > 1 &&
+    resolvedHead !== null &&
+    resolvedHead <= 1
+
+  t.assert(
+    !oldConditionTriggers && newConditionTriggers,
+    'only the updated fallback condition should handle head-only misresolution'
+  )
+
+  const remappedHead = findAbsolutePositionAfterStructuralChange(
+    oldDoc,
+    newDoc,
+    relSel.absHead
+  )
+  const remappedAnchor = findAbsolutePositionAfterStructuralChange(
+    oldDoc,
+    newDoc,
+    relSel.absAnchor
+  )
+
+  t.assert(
+    remappedHead === 5 && remappedAnchor === 13,
+    `fallback should remap both endpoints, got anchor=${remappedAnchor}, head=${remappedHead}`
+  )
+}
+
+/**
+ * Range selections must remap both endpoints after a remote block reorder.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testLocalRangeSelectionRestoredAfterRemoteBlockMove = (_tc) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+  const view1 = createNewProsemirrorView(ydoc1)
+  const view2 = createNewProsemirrorView(ydoc2)
+
+  view1.dispatch(
+    view1.state.tr.insert(0, [
+      schema.node('paragraph', undefined, schema.text('hello')),
+      schema.node('paragraph', undefined, schema.text('world'))
+    ])
+  )
+  syncYDocs(ydoc1, ydoc2)
+
+  const anchorPos = 6
+  const headPos = 12
+  view1.dispatch(
+    view1.state.tr.setSelection(TextSelection.create(view1.state.doc, anchorPos, headPos))
+  )
+
+  const oldDoc = view1.state.doc
+  const doc2 = view2.state.doc
+  const blockNode = doc2.child(1)
+  const blockStart = doc2.child(0).nodeSize
+  view2.dispatch(
+    view2.state.tr.delete(blockStart, blockStart + blockNode.nodeSize).insert(0, blockNode)
+  )
+
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  const expectedAnchor = findAbsolutePositionAfterStructuralChange(
+    oldDoc,
+    view1.state.doc,
+    anchorPos
+  )
+  const expectedHead = findAbsolutePositionAfterStructuralChange(
+    oldDoc,
+    view1.state.doc,
+    headPos
+  )
+
+  t.assert(
+    expectedAnchor !== null && expectedHead !== null,
+    'precondition: expected remapped selection endpoints should exist'
+  )
+  t.assert(
+    view1.state.selection.head === expectedHead,
+    `selection head should remap to ${expectedHead}, got ${view1.state.selection.head}`
+  )
+  t.assert(
+    view1.state.selection.anchor === expectedAnchor,
+    `selection anchor should remap to ${expectedAnchor}, got ${view1.state.selection.anchor}`
+  )
+}
+
+/**
  * User A's local selection must survive a remote block reorder.
  *
  * @param {t.TestCase} _tc
