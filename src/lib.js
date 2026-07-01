@@ -216,7 +216,7 @@ export const absolutePositionToRelativePosition = (pos, type, mapping) => {
  *
  * @param {Y.Doc} y
  * @param {Y.RelativePosition} relPos
- * @param {number} absPos
+ * @param {number|null} absPos
  * @return {boolean}
  */
 export const isMisresolvedTextPosition = (y, relPos, absPos) => {
