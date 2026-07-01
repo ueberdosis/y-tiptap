@@ -210,6 +210,26 @@ export const absolutePositionToRelativePosition = (pos, type, mapping) => {
   return Y.createRelativePositionFromTypeIndex(type, type._length, -1)
 }
 
+/**
+ * Item-id based relative positions can misresolve to the document start after
+ * block reorder during collaborative drag-and-drop.
+ *
+ * @param {Y.Doc} y
+ * @param {Y.RelativePosition} relPos
+ * @param {number} absPos
+ * @return {boolean}
+ */
+export const isMisresolvedTextPosition = (y, relPos, absPos) => {
+  if (absPos === null) {
+    return false
+  }
+  const decoded = Y.createAbsolutePositionFromRelativePosition(relPos, y)
+  return decoded !== null &&
+    decoded.type instanceof Y.XmlText &&
+    relPos.item !== null &&
+    absPos <= 1
+}
+
 const createRelativePosition = (type, item) => {
   let typeid = null
   let tname = null
@@ -287,7 +307,43 @@ export const relativePositionToAbsolutePosition = (y, documentType, relPos, mapp
     }
     type = /** @type {Y.AbstractType} */ (parent)
   }
-  return pos - 1 // we don't count the most outer tag, because it is a fragment
+  const absPos = pos - 1 // we don't count the most outer tag, because it is a fragment
+  if (isMisresolvedTextPosition(y, relPos, absPos)) {
+    return null
+  }
+  return absPos
+}
+
+/**
+ * @param {import('prosemirror-model').Node} oldDoc
+ * @param {import('prosemirror-model').Node} newDoc
+ * @param {number} absPos
+ * @return {number|null}
+ */
+export const findAbsolutePositionAfterStructuralChange = (oldDoc, newDoc, absPos) => {
+  let pos = 0
+  let targetIdx = 0
+  for (; targetIdx < oldDoc.childCount; targetIdx++) {
+    const child = oldDoc.child(targetIdx)
+    if (pos + child.nodeSize > absPos) {
+      break
+    }
+    pos += child.nodeSize
+  }
+  if (targetIdx >= oldDoc.childCount) {
+    return null
+  }
+  const offsetInChild = absPos - pos
+  const targetText = oldDoc.child(targetIdx).textContent
+  let newPos = 0
+  for (let i = 0; i < newDoc.childCount; i++) {
+    const child = newDoc.child(i)
+    if (child.textContent === targetText) {
+      return Math.min(newPos + offsetInChild, newDoc.content.size)
+    }
+    newPos += child.nodeSize
+  }
+  return null
 }
 
 /**

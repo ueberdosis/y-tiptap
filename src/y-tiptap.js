@@ -4,6 +4,7 @@ export * from './plugins/undo-plugin.js'
 export * from './plugins/keys.js'
 export {
   absolutePositionToRelativePosition, relativePositionToAbsolutePosition, setMeta,
+  findAbsolutePositionAfterStructuralChange, isMisresolvedTextPosition,
   prosemirrorJSONToYDoc, yDocToProsemirrorJSON, yDocToProsemirror, prosemirrorToYDoc,
   prosemirrorJSONToYXmlFragment, yXmlFragmentToProsemirrorJSON, yXmlFragmentToProsemirror,
   prosemirrorToYXmlFragment, yXmlFragmentToProseMirrorRootNode, yXmlFragmentToProseMirrorFragment,

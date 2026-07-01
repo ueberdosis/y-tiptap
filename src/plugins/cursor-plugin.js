@@ -185,7 +185,8 @@ export const yCursorPlugin = (
         const yCursorState = tr.getMeta(yCursorPluginKey)
         if (
           (ystate && ystate.isChangeOrigin) ||
-          (yCursorState && yCursorState.awarenessUpdated)
+          (yCursorState && yCursorState.awarenessUpdated) ||
+          tr.docChanged
         ) {
           return createDecorations(
             newState,
@@ -195,7 +196,7 @@ export const yCursorPlugin = (
             selectionBuilder
           )
         }
-        return prevState.map(tr.mapping, tr.doc)
+        return prevState
       }
     },
     props: {

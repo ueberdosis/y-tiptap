@@ -14,6 +14,7 @@ import { ySyncPluginKey, yUndoPluginKey } from './keys.js'
 import * as Y from 'yjs'
 import {
   absolutePositionToRelativePosition,
+  findAbsolutePositionAfterStructuralChange,
   relativePositionToAbsolutePosition
 } from '../lib.js'
 import * as random from 'lib0/random'
@@ -245,8 +246,9 @@ export const ySyncPlugin = (yXmlFragment, {
  * @param {import('prosemirror-state').Transaction} tr
  * @param {ReturnType<typeof getRelativeSelection>} relSel
  * @param {ProsemirrorBinding} binding
+ * @param {import('prosemirror-model').Node} [oldDoc]
  */
-const restoreRelativeSelection = (tr, relSel, binding) => {
+const restoreRelativeSelection = (tr, relSel, binding, oldDoc) => {
   if (relSel !== null && relSel.anchor !== null && relSel.head !== null) {
     if (relSel.type === 'all') {
       tr.setSelection(new AllSelection(tr.doc))
@@ -280,18 +282,50 @@ const restoreRelativeSelection = (tr, relSel, binding) => {
         tr.setSelection(selection)
       }
     } else {
-      const anchor = relativePositionToAbsolutePosition(
+      let anchor = relativePositionToAbsolutePosition(
         binding.doc,
         binding.type,
         relSel.anchor,
         binding.mapping
       )
-      const head = relativePositionToAbsolutePosition(
+      let head = relativePositionToAbsolutePosition(
         binding.doc,
         binding.type,
         relSel.head,
         binding.mapping
       )
+      if ((anchor === null || head === null) && oldDoc != null &&
+          relSel.absAnchor != null && relSel.absHead != null) {
+        anchor = findAbsolutePositionAfterStructuralChange(
+          oldDoc,
+          tr.doc,
+          relSel.absAnchor
+        )
+        head = findAbsolutePositionAfterStructuralChange(
+          oldDoc,
+          tr.doc,
+          relSel.absHead
+        )
+      } else if (
+        oldDoc != null &&
+        relSel.absAnchor != null &&
+        relSel.absHead != null &&
+        relSel.absAnchor > 1 &&
+        anchor !== null &&
+        head !== null &&
+        anchor <= 1
+      ) {
+        anchor = findAbsolutePositionAfterStructuralChange(
+          oldDoc,
+          tr.doc,
+          relSel.absAnchor
+        )
+        head = findAbsolutePositionAfterStructuralChange(
+          oldDoc,
+          tr.doc,
+          relSel.absHead
+        )
+      }
       if (anchor !== null && head !== null) {
         tr.setSelection(TextSelection.between(tr.doc.resolve(anchor), tr.doc.resolve(head)))
       }
@@ -372,7 +406,9 @@ export const getRelativeSelection = (pmbinding, state) => {
       state.selection.head,
       pmbinding.type,
       pmbinding.mapping
-    )
+    ),
+    absAnchor: state.selection.anchor,
+    absHead: state.selection.head
   }
 }
 
@@ -697,20 +733,24 @@ export class ProsemirrorBinding {
       )
       transaction.changed.forEach(delType)
       transaction.changedParentTypes.forEach(delType)
+      // Rebuild the full Y↔PM mapping so relative cursor positions resolve against
+      // current node sizes after structural changes (e.g. drag-and-drop block moves).
+      this.mapping.clear()
       const fragmentContent = this.type.toArray().map((t) =>
-        createNodeIfNotExists(
-          /** @type {Y.XmlElement | Y.XmlHook} */ (t),
+        createNodeFromYElement(
+          /** @type {Y.XmlElement} */ (t),
           this.prosemirrorView.state.schema,
           this
         )
       ).filter((n) => n !== null)
+      const oldDoc = this.prosemirrorView.state.doc
       // @ts-ignore
       let tr = this._tr.replace(
         0,
         this.prosemirrorView.state.doc.content.size,
         new PModel.Slice(PModel.Fragment.from(fragmentContent), 0, 0)
       )
-      restoreRelativeSelection(tr, this.beforeTransactionSelection, this)
+      restoreRelativeSelection(tr, this.beforeTransactionSelection, this, oldDoc)
       tr = tr.setMeta(ySyncPluginKey, { isChangeOrigin: true, isUndoRedoOperation: transaction.origin instanceof Y.UndoManager })
       if (
         this.beforeTransactionSelection !== null && this._isLocalCursorInView()
