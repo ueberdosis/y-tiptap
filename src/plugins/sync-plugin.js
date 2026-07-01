@@ -726,8 +726,8 @@ export class ProsemirrorBinding {
       // current node sizes after structural changes (e.g. drag-and-drop block moves).
       this.mapping.clear()
       const fragmentContent = this.type.toArray().map((t) =>
-        createNodeFromYElement(
-          /** @type {Y.XmlElement} */ (t),
+        createNodeIfNotExists(
+          /** @type {Y.XmlElement | Y.XmlHook} */ (t),
           this.prosemirrorView.state.schema,
           this
         )
