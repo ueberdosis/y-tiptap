@@ -211,15 +211,19 @@ export const yCursorPlugin = (
           setMeta(view, yCursorPluginKey, { awarenessUpdated: true })
         }
       }
-      const updateCursorInfo = () => {
-        const ystate = ySyncPluginKey.getState(view.state)
+      /**
+       * @param {import('prosemirror-view').EditorView} editorView
+       * @param {{ force?: boolean }} [opts]
+       */
+      const updateCursorInfo = (editorView, opts = {}) => {
+        const ystate = ySyncPluginKey.getState(editorView.state)
         // `ystate` is undefined during sync-plugin init and Y.Doc transitions;
         // reading from it here would throw and break cursor tracking for the view.
         if (!ystate || !ystate.binding) return
         // @note We make implicit checks when checking for the cursor property
         const current = awareness.getLocalState() || {}
-        if (view.hasFocus()) {
-          const selection = getSelection(view.state)
+        if (editorView.hasFocus()) {
+          const selection = getSelection(editorView.state)
           /**
            * @type {Y.RelativePosition}
            */
@@ -237,6 +241,7 @@ export const yCursorPlugin = (
             ystate.binding.mapping
           )
           if (
+            opts.force ||
             current.cursor == null ||
             !Y.compareRelativePositions(
               Y.createRelativePositionFromJSON(current.cursor.anchor),
@@ -265,14 +270,23 @@ export const yCursorPlugin = (
           awareness.setLocalStateField(cursorStateField, null)
         }
       }
+      const onFocusChange = () => updateCursorInfo(view)
       awareness.on('change', awarenessListener)
-      view.dom.addEventListener('focusin', updateCursorInfo)
-      view.dom.addEventListener('focusout', updateCursorInfo)
+      view.dom.addEventListener('focusin', onFocusChange)
+      view.dom.addEventListener('focusout', onFocusChange)
       return {
-        update: updateCursorInfo,
+        update: (editorView, prevState) => {
+          const ystate = ySyncPluginKey.getState(editorView.state)
+          const forceAwarenessUpdate = !!(
+            ystate?.isChangeOrigin &&
+            prevState?.doc &&
+            !prevState.doc.eq(editorView.state.doc)
+          )
+          updateCursorInfo(editorView, { force: forceAwarenessUpdate })
+        },
         destroy: () => {
-          view.dom.removeEventListener('focusin', updateCursorInfo)
-          view.dom.removeEventListener('focusout', updateCursorInfo)
+          view.dom.removeEventListener('focusin', onFocusChange)
+          view.dom.removeEventListener('focusout', onFocusChange)
           awareness.off('change', awarenessListener)
           awareness.setLocalStateField(cursorStateField, null)
         }
