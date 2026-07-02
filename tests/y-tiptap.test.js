@@ -9,6 +9,7 @@ import {
   absolutePositionToRelativePosition,
   createDecorations,
   findAbsolutePositionAfterStructuralChange,
+  isMisresolvedAfterStructuralChange,
   isMisresolvedTextPosition,
   prosemirrorJSONToYDoc,
   prosemirrorJSONToYXmlFragment,
@@ -1459,6 +1460,124 @@ export const testLocalSelectionRestoredAfterRemoteBlockMove = (_tc) => {
 }
 
 /**
+ * Local selection must keep its in-paragraph offset when a remote block is moved
+ * in front of the selected paragraph.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testLocalSelectionRestoredWhenBlockMovedInFront = (_tc) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+  const view1 = createNewProsemirrorView(ydoc1)
+  const view2 = createNewProsemirrorView(ydoc2)
+
+  view1.dispatch(
+    view1.state.tr.insert(0, [
+      schema.node('paragraph', undefined, schema.text('one')),
+      schema.node('paragraph', undefined, schema.text('two here')),
+      schema.node('paragraph', undefined, schema.text('three'))
+    ])
+  )
+  syncYDocs(ydoc1, ydoc2)
+
+  const cursorPos = 10
+  view1.dispatch(
+    view1.state.tr.setSelection(TextSelection.create(view1.state.doc, cursorPos))
+  )
+
+  const oldDoc = view1.state.doc
+  t.assert(
+    oldDoc.resolve(cursorPos).parentOffset > 0,
+    'precondition: selection should start mid-paragraph'
+  )
+  const doc2 = view2.state.doc
+  const movedBlock = doc2.child(2)
+  const movedBlockStart = doc2.child(0).nodeSize + doc2.child(1).nodeSize
+  view2.dispatch(
+    view2.state.tr
+      .delete(movedBlockStart, movedBlockStart + movedBlock.nodeSize)
+      .insert(0, movedBlock)
+  )
+
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  const expectedCursorPos = findAbsolutePositionAfterStructuralChange(
+    oldDoc,
+    view1.state.doc,
+    cursorPos
+  )
+
+  t.assert(
+    expectedCursorPos !== null,
+    'precondition: expected remapped cursor position should exist'
+  )
+  t.assert(
+    view1.state.selection.anchor === expectedCursorPos,
+    `local selection should stay at offset in its paragraph, expected ${expectedCursorPos}, got ${view1.state.selection.anchor}`
+  )
+  t.assert(
+    view1.state.doc.resolve(view1.state.selection.anchor).parentOffset ===
+      oldDoc.resolve(cursorPos).parentOffset,
+    'selection should preserve its in-paragraph offset after a block is moved in front'
+  )
+}
+
+/**
+ * Selection at the start of a paragraph must follow that paragraph when a block
+ * is moved in front of it.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testLocalSelectionAtParagraphStartAfterBlockMovedInFront = (_tc) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+  const view1 = createNewProsemirrorView(ydoc1)
+  const view2 = createNewProsemirrorView(ydoc2)
+
+  view1.dispatch(
+    view1.state.tr.insert(0, [
+      schema.node('paragraph', undefined, schema.text('hello')),
+      schema.node('paragraph', undefined, schema.text('block'))
+    ])
+  )
+  syncYDocs(ydoc1, ydoc2)
+
+  const cursorPos = 1
+  view1.dispatch(
+    view1.state.tr.setSelection(TextSelection.create(view1.state.doc, cursorPos))
+  )
+
+  const oldDoc = view1.state.doc
+  const doc2 = view2.state.doc
+  const blockNode = doc2.child(1)
+  const blockStart = doc2.child(0).nodeSize
+  view2.dispatch(
+    view2.state.tr.delete(blockStart, blockStart + blockNode.nodeSize).insert(0, blockNode)
+  )
+
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  const expectedCursorPos = findAbsolutePositionAfterStructuralChange(
+    oldDoc,
+    view1.state.doc,
+    cursorPos
+  )
+
+  t.assert(
+    expectedCursorPos !== null,
+    'precondition: expected remapped cursor position should exist'
+  )
+  t.assert(
+    view1.state.selection.anchor === expectedCursorPos,
+    `paragraph-start selection should move with its paragraph, expected ${expectedCursorPos}, got ${view1.state.selection.anchor}`
+  )
+}
+
+/**
  * Stale awareness positions must not render a remote caret at the document start
  * after a structural change.
  *
@@ -1682,6 +1801,45 @@ export const testIsMisresolvedTextPosition = (_tc) => {
       ystateAfter.binding.mapping
     ) === null,
     'stale relative positions should resolve to null after block reorder'
+  )
+}
+
+/**
+ * @param {t.TestCase} _tc
+ */
+export const testIsMisresolvedAfterStructuralChange = (_tc) => {
+  const oldDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('one')),
+    schema.node('paragraph', undefined, schema.text('two here')),
+    schema.node('paragraph', undefined, schema.text('three'))
+  ])
+  const newDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('three')),
+    schema.node('paragraph', undefined, schema.text('one')),
+    schema.node('paragraph', undefined, schema.text('two here'))
+  ])
+
+  t.assert(
+    isMisresolvedAfterStructuralChange(oldDoc, newDoc, 10, 8),
+    'resolved positions at the start of the correct block should be treated as misresolved'
+  )
+  t.assert(
+    isMisresolvedAfterStructuralChange(oldDoc, newDoc, 10, 17) === false,
+    'correctly remapped positions should not be treated as misresolved'
+  )
+
+  const movedStartOldDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('hello')),
+    schema.node('paragraph', undefined, schema.text('block'))
+  ])
+  const movedStartNewDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('block')),
+    schema.node('paragraph', undefined, schema.text('hello'))
+  ])
+
+  t.assert(
+    isMisresolvedAfterStructuralChange(movedStartOldDoc, movedStartNewDoc, 1, 1),
+    'paragraph-start selections attached to the wrong block should be treated as misresolved'
   )
 }
 

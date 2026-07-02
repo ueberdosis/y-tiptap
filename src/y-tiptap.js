@@ -5,6 +5,7 @@ export * from './plugins/keys.js'
 export {
   absolutePositionToRelativePosition, relativePositionToAbsolutePosition, setMeta,
   findAbsolutePositionAfterStructuralChange, isMisresolvedTextPosition,
+  isMisresolvedAfterStructuralChange,
   prosemirrorJSONToYDoc, yDocToProsemirrorJSON, yDocToProsemirror, prosemirrorToYDoc,
   prosemirrorJSONToYXmlFragment, yXmlFragmentToProsemirrorJSON, yXmlFragmentToProsemirror,
   prosemirrorToYXmlFragment, yXmlFragmentToProseMirrorRootNode, yXmlFragmentToProseMirrorFragment,

@@ -347,6 +347,38 @@ export const findAbsolutePositionAfterStructuralChange = (oldDoc, newDoc, absPos
 }
 
 /**
+ * Detect stale relative positions after structural changes that resolve to the
+ * wrong text block or to the start of the correct block.
+ *
+ * @param {import('prosemirror-model').Node} oldDoc
+ * @param {import('prosemirror-model').Node} newDoc
+ * @param {number} oldAbs
+ * @param {number|null} resolvedAbs
+ * @return {boolean}
+ */
+export const isMisresolvedAfterStructuralChange = (oldDoc, newDoc, oldAbs, resolvedAbs) => {
+  if (resolvedAbs === null) {
+    return false
+  }
+  const $old = oldDoc.resolve(oldAbs)
+  const $new = newDoc.resolve(resolvedAbs)
+  if (!$old.parent.isTextblock || !$new.parent.isTextblock) {
+    return false
+  }
+  if ($old.parent.textContent !== $new.parent.textContent) {
+    return true
+  }
+  if ($old.parentOffset !== 0 && $new.parentOffset === 0) {
+    return true
+  }
+  if ($old.parentOffset === 0 && $new.parentOffset === 0) {
+    const expected = findAbsolutePositionAfterStructuralChange(oldDoc, newDoc, oldAbs)
+    return expected !== null && expected !== resolvedAbs
+  }
+  return false
+}
+
+/**
  * Utility function for converting an Y.Fragment to a ProseMirror fragment.
  *
  * @param {Y.XmlFragment} yXmlFragment
