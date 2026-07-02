@@ -1885,7 +1885,32 @@ export const testFindAbsolutePositionAfterStructuralChange = (_tc) => {
   )
   t.assert(
     duplicateRemapped === 10,
-    'duplicate paragraph text should remap to the first matching block, got ' + duplicateRemapped
+    'duplicate paragraph text should remap to the matching occurrence, got ' + duplicateRemapped
+  )
+
+  const secondDuplicateRemapped = findAbsolutePositionAfterStructuralChange(
+    duplicateOldDoc,
+    duplicateNewDoc,
+    9
+  )
+  t.assert(
+    secondDuplicateRemapped === 16,
+    'the second duplicate paragraph should remap to the second matching block, got ' +
+      secondDuplicateRemapped
+  )
+
+  const emptyOldDoc = schema.node('doc', undefined, [
+    schema.node('paragraph'),
+    schema.node('paragraph')
+  ])
+  const emptyNewDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('inserted')),
+    schema.node('paragraph'),
+    schema.node('paragraph')
+  ])
+  t.assert(
+    findAbsolutePositionAfterStructuralChange(emptyOldDoc, emptyNewDoc, 2) === 13,
+    'the second empty paragraph should remap to the second empty block'
   )
 
   t.assert(

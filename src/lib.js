@@ -333,13 +333,29 @@ export const findAbsolutePositionAfterStructuralChange = (oldDoc, newDoc, absPos
   if (targetIdx >= oldDoc.childCount) {
     return null
   }
+  const targetChild = oldDoc.child(targetIdx)
   const offsetInChild = absPos - pos
-  const targetText = oldDoc.child(targetIdx).textContent
+
+  let occurrence = 0
+  for (let i = 0; i <= targetIdx; i++) {
+    const child = oldDoc.child(i)
+    if (child.type === targetChild.type && child.textContent === targetChild.textContent) {
+      occurrence++
+    }
+  }
+
+  let matchCount = 0
   let newPos = 0
   for (let i = 0; i < newDoc.childCount; i++) {
     const child = newDoc.child(i)
-    if (child.textContent === targetText) {
-      return Math.min(newPos + offsetInChild, newDoc.content.size)
+    if (child.type === targetChild.type && child.textContent === targetChild.textContent) {
+      matchCount++
+      if (matchCount === occurrence) {
+        const remapped = newPos + offsetInChild
+        const contentStart = newPos + 1
+        const contentEnd = newPos + child.nodeSize - 1
+        return Math.max(contentStart, Math.min(remapped, contentEnd))
+      }
     }
     newPos += child.nodeSize
   }
