@@ -1,5 +1,11 @@
 # @tiptap/y-tiptap
 
+## 3.0.6
+
+### Patch Changes
+
+- eedb56e: Fix remote collaborator carets jumping or splitting during drag-and-drop in collaborative editing.
+
 ## 3.0.5
 
 ### Patch Changes
