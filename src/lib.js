@@ -4,6 +4,7 @@ import * as Y from 'yjs'
 import { EditorView } from 'prosemirror-view' // eslint-disable-line
 import { Node, Schema, Fragment } from 'prosemirror-model' // eslint-disable-line
 import * as error from 'lib0/error'
+import { ReplaceStep } from 'prosemirror-transform'
 import * as map from 'lib0/map'
 import * as eventloop from 'lib0/eventloop'
 
@@ -210,6 +211,26 @@ export const absolutePositionToRelativePosition = (pos, type, mapping) => {
   return Y.createRelativePositionFromTypeIndex(type, type._length, -1)
 }
 
+/**
+ * Item-id based relative positions can misresolve to the document start after
+ * block reorder during collaborative drag-and-drop.
+ *
+ * @param {Y.Doc} y
+ * @param {Y.RelativePosition} relPos
+ * @param {number|null} absPos
+ * @return {boolean}
+ */
+export const isMisresolvedTextPosition = (y, relPos, absPos) => {
+  if (absPos === null) {
+    return false
+  }
+  const decoded = Y.createAbsolutePositionFromRelativePosition(relPos, y)
+  return decoded !== null &&
+    decoded.type instanceof Y.XmlText &&
+    relPos.item !== null &&
+    absPos <= 1
+}
+
 const createRelativePosition = (type, item) => {
   let typeid = null
   let tname = null
@@ -287,7 +308,133 @@ export const relativePositionToAbsolutePosition = (y, documentType, relPos, mapp
     }
     type = /** @type {Y.AbstractType} */ (parent)
   }
-  return pos - 1 // we don't count the most outer tag, because it is a fragment
+  const absPos = pos - 1 // we don't count the most outer tag, because it is a fragment
+  if (isMisresolvedTextPosition(y, relPos, absPos)) {
+    return null
+  }
+  return absPos
+}
+
+/**
+ * @param {import('prosemirror-model').Node} oldDoc
+ * @param {import('prosemirror-model').Node} newDoc
+ * @param {number} absPos
+ * @return {number|null}
+ */
+export const findAbsolutePositionAfterStructuralChange = (oldDoc, newDoc, absPos) => {
+  let pos = 0
+  let targetIdx = 0
+  for (; targetIdx < oldDoc.childCount; targetIdx++) {
+    const child = oldDoc.child(targetIdx)
+    if (pos + child.nodeSize > absPos) {
+      break
+    }
+    pos += child.nodeSize
+  }
+  if (targetIdx >= oldDoc.childCount) {
+    return null
+  }
+  const targetChild = oldDoc.child(targetIdx)
+  const offsetInChild = absPos - pos
+
+  let occurrence = 0
+  for (let i = 0; i <= targetIdx; i++) {
+    const child = oldDoc.child(i)
+    if (child.type === targetChild.type && child.textContent === targetChild.textContent) {
+      occurrence++
+    }
+  }
+
+  let matchCount = 0
+  let newPos = 0
+  for (let i = 0; i < newDoc.childCount; i++) {
+    const child = newDoc.child(i)
+    if (child.type === targetChild.type && child.textContent === targetChild.textContent) {
+      matchCount++
+      if (matchCount === occurrence) {
+        const remapped = newPos + offsetInChild
+        const contentStart = newPos + 1
+        const contentEnd = newPos + child.nodeSize - 1
+        return Math.max(contentStart, Math.min(remapped, contentEnd))
+      }
+    }
+    newPos += child.nodeSize
+  }
+  return null
+}
+
+/**
+ * Returns true when a transaction changes block structure rather than only
+ * editing inline content inside existing blocks.
+ *
+ * @param {import('prosemirror-state').Transaction} tr
+ * @param {import('prosemirror-model').Node} oldDoc
+ * @return {boolean}
+ */
+export const isStructuralTransaction = (tr, oldDoc) => {
+  if (!tr.docChanged) {
+    return false
+  }
+  if (tr.doc.childCount !== oldDoc.childCount) {
+    return true
+  }
+  for (const step of tr.steps) {
+    if (step instanceof ReplaceStep) {
+      if (step.from === 0 && step.to === oldDoc.content.size) {
+        return true
+      }
+      if (step.slice.content.size > 0) {
+        let hasBlock = false
+        step.slice.content.forEach((node) => {
+          if (node.isBlock) {
+            hasBlock = true
+          }
+        })
+        if (hasBlock) {
+          return true
+        }
+      } else if (step.to > step.from) {
+        const $from = oldDoc.resolve(step.from)
+        const $to = oldDoc.resolve(step.to)
+        if ($from.depth === 0 && $to.depth === 0 && $from.index() !== $to.index()) {
+          return true
+        }
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Detect stale relative positions after structural changes that resolve to the
+ * wrong text block or to the start of the correct block.
+ *
+ * @param {import('prosemirror-model').Node} oldDoc
+ * @param {import('prosemirror-model').Node} newDoc
+ * @param {number} oldAbs
+ * @param {number|null} resolvedAbs
+ * @return {boolean}
+ */
+export const isMisresolvedAfterStructuralChange = (oldDoc, newDoc, oldAbs, resolvedAbs) => {
+  if (resolvedAbs === null) {
+    return false
+  }
+  const $old = oldDoc.resolve(oldAbs)
+  const $new = newDoc.resolve(resolvedAbs)
+  if (!$old.parent.isTextblock || !$new.parent.isTextblock) {
+    return false
+  }
+  if ($old.parent.textContent !== $new.parent.textContent) {
+    return true
+  }
+  if ($old.parentOffset !== 0 && $new.parentOffset === 0) {
+    return true
+  }
+  if ($old.parentOffset === 0 && $new.parentOffset === 0) {
+    const expected = findAbsolutePositionAfterStructuralChange(oldDoc, newDoc, oldAbs)
+    return expected !== null && expected !== resolvedAbs
+  }
+  return false
 }
 
 /**
