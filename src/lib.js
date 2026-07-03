@@ -4,6 +4,7 @@ import * as Y from 'yjs'
 import { EditorView } from 'prosemirror-view' // eslint-disable-line
 import { Node, Schema, Fragment } from 'prosemirror-model' // eslint-disable-line
 import * as error from 'lib0/error'
+import { ReplaceStep } from 'prosemirror-transform'
 import * as map from 'lib0/map'
 import * as eventloop from 'lib0/eventloop'
 
@@ -360,6 +361,48 @@ export const findAbsolutePositionAfterStructuralChange = (oldDoc, newDoc, absPos
     newPos += child.nodeSize
   }
   return null
+}
+
+/**
+ * Returns true when a transaction changes block structure rather than only
+ * editing inline content inside existing blocks.
+ *
+ * @param {import('prosemirror-state').Transaction} tr
+ * @param {import('prosemirror-model').Node} oldDoc
+ * @return {boolean}
+ */
+export const isStructuralTransaction = (tr, oldDoc) => {
+  if (!tr.docChanged) {
+    return false
+  }
+  if (tr.doc.childCount !== oldDoc.childCount) {
+    return true
+  }
+  for (const step of tr.steps) {
+    if (step instanceof ReplaceStep) {
+      if (step.from === 0 && step.to === oldDoc.content.size) {
+        return true
+      }
+      if (step.slice.content.size > 0) {
+        let hasBlock = false
+        step.slice.content.forEach((node) => {
+          if (node.isBlock) {
+            hasBlock = true
+          }
+        })
+        if (hasBlock) {
+          return true
+        }
+      } else if (step.to > step.from) {
+        const $from = oldDoc.resolve(step.from)
+        const $to = oldDoc.resolve(step.to)
+        if ($from.depth === 0 && $to.depth === 0 && $from.index() !== $to.index()) {
+          return true
+        }
+      }
+    }
+  }
+  return false
 }
 
 /**

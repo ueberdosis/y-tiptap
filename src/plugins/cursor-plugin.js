@@ -4,6 +4,7 @@ import { Plugin } from "prosemirror-state"; // eslint-disable-line
 import { Awareness } from "y-protocols/awareness"; // eslint-disable-line
 import {
   absolutePositionToRelativePosition,
+  isStructuralTransaction,
   relativePositionToAbsolutePosition,
   setMeta
 } from '../lib.js'
@@ -180,13 +181,12 @@ export const yCursorPlugin = (
           selectionBuilder
         )
       },
-      apply (tr, prevState, _oldState, newState) {
+      apply (tr, prevState, oldState, newState) {
         const ystate = ySyncPluginKey.getState(newState)
         const yCursorState = tr.getMeta(yCursorPluginKey)
         if (
           (ystate && ystate.isChangeOrigin) ||
-          (yCursorState && yCursorState.awarenessUpdated) ||
-          tr.docChanged
+          (yCursorState && yCursorState.awarenessUpdated)
         ) {
           return createDecorations(
             newState,
@@ -195,6 +195,18 @@ export const yCursorPlugin = (
             cursorBuilder,
             selectionBuilder
           )
+        }
+        if (tr.docChanged) {
+          if (isStructuralTransaction(tr, oldState.doc)) {
+            return createDecorations(
+              newState,
+              awareness,
+              awarenessStateFilter,
+              cursorBuilder,
+              selectionBuilder
+            )
+          }
+          return prevState.map(tr.mapping, tr.doc)
         }
         return prevState
       }
