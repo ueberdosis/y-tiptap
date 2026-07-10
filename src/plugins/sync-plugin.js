@@ -244,6 +244,31 @@ export const ySyncPlugin = (yXmlFragment, {
 }
 
 /**
+ * Resolves one text-selection endpoint after a remote update. Falls back to
+ * content-based matching when the Yjs resolution is missing or lands in the
+ * wrong block, and keeps the Yjs resolution when the fallback finds nothing.
+ *
+ * @param {import('prosemirror-model').Node} newDoc
+ * @param {import('prosemirror-model').Node} oldDoc
+ * @param {number|null|undefined} oldAbs
+ * @param {number|null} resolved
+ * @return {number|null}
+ */
+const recoverSelectionEndpoint = (newDoc, oldDoc, oldAbs, resolved) => {
+  if (oldAbs == null) {
+    return resolved
+  }
+  const misresolved = resolved === null ||
+    (oldAbs > 1 && resolved <= 1) ||
+    isMisresolvedAfterStructuralChange(oldDoc, newDoc, oldAbs, resolved)
+  if (!misresolved) {
+    return resolved
+  }
+  const recovered = findAbsolutePositionAfterStructuralChange(oldDoc, newDoc, oldAbs)
+  return recovered !== null ? recovered : resolved
+}
+
+/**
  * @param {import('prosemirror-state').Transaction} tr
  * @param {ReturnType<typeof getRelativeSelection>} relSel
  * @param {ProsemirrorBinding} binding
@@ -295,28 +320,17 @@ const restoreRelativeSelection = (tr, relSel, binding, oldDoc) => {
         relSel.head,
         binding.mapping
       )
-      const needsContentFallback = oldDoc != null &&
-        relSel.absAnchor != null &&
-        relSel.absHead != null &&
-        (
-          anchor === null ||
-          head === null ||
-          (relSel.absAnchor > 1 && anchor !== null && anchor <= 1) ||
-          (relSel.absHead > 1 && head !== null && head <= 1) ||
-          isMisresolvedAfterStructuralChange(oldDoc, tr.doc, relSel.absAnchor, anchor) ||
-          isMisresolvedAfterStructuralChange(oldDoc, tr.doc, relSel.absHead, head)
-        )
-      if (needsContentFallback) {
-        anchor = findAbsolutePositionAfterStructuralChange(
-          oldDoc,
-          tr.doc,
-          relSel.absAnchor
-        )
-        head = findAbsolutePositionAfterStructuralChange(
-          oldDoc,
-          tr.doc,
-          relSel.absHead
-        )
+      if (oldDoc != null) {
+        anchor = recoverSelectionEndpoint(tr.doc, oldDoc, relSel.absAnchor, anchor)
+        head = recoverSelectionEndpoint(tr.doc, oldDoc, relSel.absHead, head)
+      }
+      // Collapse to the surviving endpoint instead of dropping the selection;
+      // an unset selection maps through the full-doc replace to the doc start.
+      if (anchor === null) {
+        anchor = head
+      }
+      if (head === null) {
+        head = anchor
       }
       if (anchor !== null && head !== null) {
         tr.setSelection(TextSelection.between(tr.doc.resolve(anchor), tr.doc.resolve(head)))
