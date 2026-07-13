@@ -18,7 +18,13 @@ const { window } = new jsdom.JSDOM(documentContent)
 global.window = window
 global.document = window.document
 global.innerHeight = 0
-document.getSelection = () => ({ })
+document.getSelection = () => ({
+  addRange () {},
+  collapse () {},
+  extend () {},
+  rangeCount: 0,
+  removeAllRanges () {}
+})
 
 document.createRange = () => ({
   setStart () {},

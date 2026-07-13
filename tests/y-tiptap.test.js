@@ -25,7 +25,11 @@ import {
   yUndoPlugin,
   yXmlFragmentToProsemirrorJSON
 } from '../src/y-tiptap.js'
-import { Awareness } from 'y-protocols/awareness'
+import {
+  applyAwarenessUpdate,
+  Awareness,
+  encodeAwarenessUpdate
+} from 'y-protocols/awareness'
 import {
   EditorState,
   Plugin,
@@ -857,6 +861,16 @@ const createViewWithCursor = (ydoc, awareness) => {
 const syncYDocs = (ydocA, ydocB) => {
   Y.applyUpdate(ydocB, Y.encodeStateAsUpdate(ydocA))
   Y.applyUpdate(ydocA, Y.encodeStateAsUpdate(ydocB))
+}
+
+/**
+ * @param {Awareness} source
+ * @param {Awareness} target
+ * @param {number} clientId
+ */
+const syncAwareness = (source, target, clientId) => {
+  const update = encodeAwarenessUpdate(source, [clientId])
+  applyAwarenessUpdate(target, update, 'test')
 }
 
 /**
@@ -1803,6 +1817,114 @@ export const testNodeRangeSelectionRestoredWithDuplicateBlockText = (_tc) => {
   t.assert(
     newDoc.resolve(Math.min(sel.anchor, sel.head)).index(0) === expectedBlockIndex,
     'node range should still select the second duplicate block, not the first'
+  )
+}
+
+/**
+ * A local block move changes the ProseMirror document before it updates the
+ * Yjs mapping. Remote awareness must stay hidden during that transition.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testRemoteCursorHiddenDuringLocalStructuralChange = (_tc) => {
+  const ydoc = new Y.Doc()
+  ydoc.clientID = 1
+  const awareness = new Awareness(ydoc)
+  const view = createViewWithCursor(ydoc, awareness)
+  const remoteClientId = 2
+
+  view.dispatch(
+    view.state.tr.insert(0, [
+      schema.node('paragraph', undefined, schema.text('hello')),
+      schema.node('paragraph', undefined, schema.text('block'))
+    ])
+  )
+  publishRemoteCursor(view, awareness, remoteClientId, 6)
+
+  const initialDoc = view.state.doc
+  const blockNode = initialDoc.child(1)
+  const blockStart = initialDoc.child(0).nodeSize
+  view.dispatch(
+    view.state.tr
+      .delete(blockStart, blockStart + blockNode.nodeSize)
+      .insert(0, blockNode)
+  )
+
+  const decorations = yCursorPluginKey.getState(view.state)
+  t.assert(
+    decorations.find(0, view.state.doc.content.size).length === 0,
+    'stale awareness should not leave a caret or selection highlight behind'
+  )
+}
+
+/**
+ * A remote cursor returns only after its owner restores its selection and
+ * publishes a position against the changed Yjs document.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testRemoteCursorRestoredAfterStructuralChange = async (_tc) => {
+  const ydocA = new Y.Doc()
+  ydocA.clientID = 1
+  const ydocB = new Y.Doc()
+  ydocB.clientID = 2
+  const awarenessA = new Awareness(ydocA)
+  const awarenessB = new Awareness(ydocB)
+  const viewA = createViewWithCursor(ydocA, awarenessA)
+  const viewB = createViewWithCursor(ydocB, awarenessB)
+
+  viewA.dispatch(
+    viewA.state.tr.insert(0, [
+      schema.node('paragraph', undefined, schema.text('hello')),
+      schema.node('paragraph', undefined, schema.text('block'))
+    ])
+  )
+  syncYDocs(ydocA, ydocB)
+
+  const typingCursorPos = 6
+  // JSDOM cannot focus an EditorView, but the cursor plugin must see A as
+  // focused to publish the selection through awareness.
+  viewA.hasFocus = () => true
+  viewA.dispatch(
+    viewA.state.tr.setSelection(TextSelection.create(viewA.state.doc, typingCursorPos))
+  )
+  const initialCursor = awarenessA.getLocalState().cursor
+  syncAwareness(awarenessA, awarenessB, ydocA.clientID)
+  await promise.wait(10)
+
+  const initialDoc = viewB.state.doc
+  const movedBlock = initialDoc.child(1)
+  const blockStart = initialDoc.child(0).nodeSize
+  viewB.dispatch(
+    viewB.state.tr
+      .delete(blockStart, blockStart + movedBlock.nodeSize)
+      .insert(0, movedBlock)
+  )
+  t.assert(
+    getRemoteCursorWidgetPos(viewB) === null,
+    'stale remote cursor should be hidden while the document update is in flight'
+  )
+
+  Y.applyUpdate(ydocA, Y.encodeStateAsUpdate(ydocB))
+
+  const expectedCursorPos = typingCursorPos + movedBlock.nodeSize
+  t.assert(
+    viewA.state.selection.head === expectedCursorPos,
+    `local cursor should recover to ${expectedCursorPos}, got ${viewA.state.selection.head}`
+  )
+  const restoredCursor = awarenessA.getLocalState().cursor
+  t.assert(
+    !Y.compareRelativePositions(initialCursor.head, restoredCursor.head),
+    'typing user should publish a new cursor position after the structural update'
+  )
+
+  syncAwareness(awarenessA, awarenessB, ydocA.clientID)
+  await promise.wait(10)
+
+  const widgetPos = getRemoteCursorWidgetPos(viewB)
+  t.assert(
+    widgetPos === expectedCursorPos,
+    `refreshed remote cursor should render at ${expectedCursorPos}, got ${widgetPos}`
   )
 }
 
