@@ -1,5 +1,12 @@
 # @tiptap/y-tiptap
 
+## 3.0.7
+
+### Patch Changes
+
+- d87cc9c: Hide stale remote carets during local structural changes and restore them from refreshed awareness positions.
+- 42c166f: Fix carets jumping or splitting when a remote user drags a block above a paragraph being typed in. Cursor recovery now detects more misresolved positions, matches blocks by attrs when text diverged, and no longer sends the cursor to the document start when recovery fails.
+
 ## 3.0.6
 
 ### Patch Changes
