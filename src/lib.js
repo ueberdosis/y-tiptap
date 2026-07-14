@@ -372,6 +372,9 @@ const remapIntoBlock = ($oldPos, newBlockStart, newBlock) => {
     }
     pos += 1
     node = node.child(idx)
+    if (node.type !== $oldPos.node(depth + 1).type) {
+      return null
+    }
   }
   if (!node.isTextblock) {
     return null

@@ -207,15 +207,6 @@ export const yCursorPlugin = (
           )
         }
         if (tr.docChanged) {
-          if (isStructuralTransaction(tr, oldState.doc)) {
-            return createDecorations(
-              newState,
-              awareness,
-              awarenessStateFilter,
-              cursorBuilder,
-              selectionBuilder
-            )
-          }
           return prevState.map(tr.mapping, tr.doc)
         }
         return prevState

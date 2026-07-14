@@ -2501,6 +2501,17 @@ export const testFindAbsolutePositionInNestedBlocks = (_tc) => {
     findAbsolutePositionAfterStructuralChange(oldDoc, restructuredNewDoc, 14) === null,
     'a changed inner structure should bail out instead of guessing'
   )
+
+  const typeChangedOldDoc = schema.node('doc', undefined, [
+    schema.node('blockquote', undefined, schema.node('paragraph', undefined, schema.text('same')))
+  ])
+  const typeChangedNewDoc = schema.node('doc', undefined, [
+    schema.node('blockquote', undefined, schema.node('heading', { level: 1 }, schema.text('same')))
+  ])
+  t.assert(
+    findAbsolutePositionAfterStructuralChange(typeChangedOldDoc, typeChangedNewDoc, 3) === null,
+    'a changed nested node type should bail out instead of guessing'
+  )
 }
 
 /**
