@@ -23,6 +23,7 @@ import {
   ySyncPlugin,
   ySyncPluginKey,
   yUndoPlugin,
+  yUndoPluginKey,
   yXmlFragmentToProsemirrorJSON
 } from '../src/y-tiptap.js'
 import { Awareness } from 'y-protocols/awareness'
@@ -577,6 +578,42 @@ export const testAddToHistory = (_tc) => {
   t.assert(
     yxml.length === 2 && yxml.get(0).length === 1,
     'insertion was *not* undone'
+  )
+}
+
+/**
+ * Undoing a plain text edit must restore the cursor to its pre-edit position.
+ * The structural-change fallback used to misfire on text undo (the paragraph's
+ * textContent always differs), discard the correctly resolved position, and
+ * let the cursor jump to the end of the document.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testUndoRestoresCursorAfterTextEdit = (_tc) => {
+  const ydoc = new Y.Doc()
+  const view = createNewProsemirrorViewWithUndoManager(ydoc)
+  view.dispatch(
+    view.state.tr.insert(0, [
+      schema.node('paragraph', undefined, schema.text('hello world')),
+      schema.node('paragraph', undefined, schema.text('second'))
+    ])
+  )
+  // separate the initial content from the edit we are going to undo
+  yUndoPluginKey.getState(view.state).undoManager.stopCapturing()
+  // place the cursor after "hello" and type
+  view.dispatch(
+    view.state.tr.setSelection(TextSelection.create(view.state.doc, 6))
+  )
+  view.dispatch(view.state.tr.insertText('!!!', 6, 6))
+  undo(view.state)
+  t.compare(
+    view.state.doc.child(0).textContent,
+    'hello world',
+    'text edit was undone'
+  )
+  t.assert(
+    view.state.selection.head === 6,
+    `cursor should be restored to its pre-edit position (is ${view.state.selection.head})`
   )
 }
 
@@ -2021,6 +2058,22 @@ export const testIsMisresolvedAfterStructuralChange = (_tc) => {
   t.assert(
     isMisresolvedAfterStructuralChange(movedStartOldDoc, movedStartNewDoc, 1, 1),
     'paragraph-start selections attached to the wrong block should be treated as misresolved'
+  )
+
+  // In-place text edits (e.g. undo of typing) change the block's text without
+  // moving the block, so the resolved position must be trusted even though the
+  // textContent differs.
+  const textEditOldDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('hello!!! world')),
+    schema.node('paragraph', undefined, schema.text('second'))
+  ])
+  const textEditNewDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('hello world')),
+    schema.node('paragraph', undefined, schema.text('second'))
+  ])
+  t.assert(
+    isMisresolvedAfterStructuralChange(textEditOldDoc, textEditNewDoc, 6, 6) === false,
+    'in-place text edits should not be treated as misresolved'
   )
 }
 

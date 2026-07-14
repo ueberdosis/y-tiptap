@@ -307,16 +307,21 @@ const restoreRelativeSelection = (tr, relSel, binding, oldDoc) => {
           isMisresolvedAfterStructuralChange(oldDoc, tr.doc, relSel.absHead, head)
         )
       if (needsContentFallback) {
-        anchor = findAbsolutePositionAfterStructuralChange(
+        // Keep the positions resolved from relative positions when the
+        // content-based fallback cannot locate the block in the new doc,
+        // instead of discarding a valid selection.
+        const fallbackAnchor = findAbsolutePositionAfterStructuralChange(
           oldDoc,
           tr.doc,
           relSel.absAnchor
         )
-        head = findAbsolutePositionAfterStructuralChange(
+        const fallbackHead = findAbsolutePositionAfterStructuralChange(
           oldDoc,
           tr.doc,
           relSel.absHead
         )
+        anchor = fallbackAnchor !== null ? fallbackAnchor : anchor
+        head = fallbackHead !== null ? fallbackHead : head
       }
       if (anchor !== null && head !== null) {
         tr.setSelection(TextSelection.between(tr.doc.resolve(anchor), tr.doc.resolve(head)))

@@ -425,7 +425,12 @@ export const isMisresolvedAfterStructuralChange = (oldDoc, newDoc, oldAbs, resol
     return false
   }
   if ($old.parent.textContent !== $new.parent.textContent) {
-    return true
+    // Only treat a text mismatch as misresolution when the old block still
+    // exists elsewhere in the new doc (i.e. it was moved, not edited). A plain
+    // text edit such as undo/redo changes the block's text in place, and the
+    // relative position resolution should be trusted.
+    const expected = findAbsolutePositionAfterStructuralChange(oldDoc, newDoc, oldAbs)
+    return expected !== null && expected !== resolvedAbs
   }
   if ($old.parentOffset !== 0 && $new.parentOffset === 0) {
     return true
