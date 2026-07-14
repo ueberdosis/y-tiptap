@@ -184,8 +184,18 @@ export const yCursorPlugin = (
       apply (tr, prevState, oldState, newState) {
         const ystate = ySyncPluginKey.getState(newState)
         const yCursorState = tr.getMeta(yCursorPluginKey)
+        const isRemoteChange = ystate && ystate.isChangeOrigin
         if (
-          (ystate && ystate.isChangeOrigin) ||
+          tr.docChanged &&
+          !isRemoteChange &&
+          isStructuralTransaction(tr, oldState.doc)
+        ) {
+          // The ProseMirror document leads the Yjs mapping during local moves.
+          // Hide stale awareness until the collaborator publishes its new cursor.
+          return DecorationSet.empty
+        }
+        if (
+          isRemoteChange ||
           (yCursorState && yCursorState.awarenessUpdated)
         ) {
           return createDecorations(
@@ -197,15 +207,6 @@ export const yCursorPlugin = (
           )
         }
         if (tr.docChanged) {
-          if (isStructuralTransaction(tr, oldState.doc)) {
-            return createDecorations(
-              newState,
-              awareness,
-              awarenessStateFilter,
-              cursorBuilder,
-              selectionBuilder
-            )
-          }
           return prevState.map(tr.mapping, tr.doc)
         }
         return prevState

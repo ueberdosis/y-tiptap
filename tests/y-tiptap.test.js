@@ -25,7 +25,11 @@ import {
   yUndoPlugin,
   yXmlFragmentToProsemirrorJSON
 } from '../src/y-tiptap.js'
-import { Awareness } from 'y-protocols/awareness'
+import {
+  applyAwarenessUpdate,
+  Awareness,
+  encodeAwarenessUpdate
+} from 'y-protocols/awareness'
 import {
   EditorState,
   Plugin,
@@ -860,6 +864,16 @@ const syncYDocs = (ydocA, ydocB) => {
 }
 
 /**
+ * @param {Awareness} source
+ * @param {Awareness} target
+ * @param {number} clientId
+ */
+const syncAwareness = (source, target, clientId) => {
+  const update = encodeAwarenessUpdate(source, [clientId])
+  applyAwarenessUpdate(target, update, 'test')
+}
+
+/**
  * @param {import('prosemirror-view').EditorView} view
  * @param {Awareness} awareness
  * @param {number} remoteClientId
@@ -1579,6 +1593,94 @@ export const testLocalSelectionAtParagraphStartAfterBlockMovedInFront = (_tc) =>
 }
 
 /**
+ * When the content fallback cannot find the block (e.g. a remote edit changed
+ * the text of the cursor's own paragraph), the Yjs-resolved position must be
+ * kept. Dropping it unsets the selection and the cursor jumps to the start.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testLocalSelectionKeptWhenContentFallbackFails = (_tc) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+  const view1 = createNewProsemirrorView(ydoc1)
+  const view2 = createNewProsemirrorView(ydoc2)
+
+  view1.dispatch(
+    view1.state.tr.insert(0, [
+      schema.node('paragraph', undefined, schema.text('hello')),
+      schema.node('paragraph', undefined, schema.text('world'))
+    ])
+  )
+  syncYDocs(ydoc1, ydoc2)
+
+  // Cursor at "wor|ld" in the second paragraph.
+  const cursorPos = view1.state.doc.child(0).nodeSize + 1 + 3
+  view1.dispatch(
+    view1.state.tr.setSelection(TextSelection.create(view1.state.doc, cursorPos))
+  )
+
+  // Remote prepends a character to the same paragraph, so no block in the
+  // rebuilt doc carries the old text and the fallback returns null.
+  const remoteInsertPos = view2.state.doc.child(0).nodeSize + 1
+  view2.dispatch(view2.state.tr.insertText('X', remoteInsertPos, remoteInsertPos))
+
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  t.assert(
+    view1.state.selection.anchor === cursorPos + 1,
+    `cursor should stay at its character after a remote insert, expected ${cursorPos + 1}, got ${view1.state.selection.anchor}`
+  )
+}
+
+/**
+ * A misresolved head must not drag a correctly resolved anchor into the
+ * content fallback; endpoints are handled independently.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testRangeSelectionEndpointsRestoredIndependently = (_tc) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+  const view1 = createNewProsemirrorView(ydoc1)
+  const view2 = createNewProsemirrorView(ydoc2)
+
+  view1.dispatch(
+    view1.state.tr.insert(0, [
+      schema.node('paragraph', undefined, schema.text('hello')),
+      schema.node('paragraph', undefined, schema.text('world'))
+    ])
+  )
+  syncYDocs(ydoc1, ydoc2)
+
+  // Anchor at "he|llo", head at "wor|ld".
+  const anchorPos = 3
+  const headPos = view1.state.doc.child(0).nodeSize + 1 + 3
+  view1.dispatch(
+    view1.state.tr.setSelection(
+      TextSelection.create(view1.state.doc, anchorPos, headPos)
+    )
+  )
+
+  const remoteInsertPos = view2.state.doc.child(0).nodeSize + 1
+  view2.dispatch(view2.state.tr.insertText('X', remoteInsertPos, remoteInsertPos))
+
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  t.assert(
+    view1.state.selection.anchor === anchorPos,
+    `anchor should be untouched by the head's misresolution, expected ${anchorPos}, got ${view1.state.selection.anchor}`
+  )
+  t.assert(
+    view1.state.selection.head === headPos + 1,
+    `head should keep its Yjs resolution, expected ${headPos + 1}, got ${view1.state.selection.head}`
+  )
+}
+
+/**
  * Local selection must stay in the correct block when multiple blocks share the
  * same text content and a remote structural change reorders the document.
  *
@@ -1715,6 +1817,114 @@ export const testNodeRangeSelectionRestoredWithDuplicateBlockText = (_tc) => {
   t.assert(
     newDoc.resolve(Math.min(sel.anchor, sel.head)).index(0) === expectedBlockIndex,
     'node range should still select the second duplicate block, not the first'
+  )
+}
+
+/**
+ * A local block move changes the ProseMirror document before it updates the
+ * Yjs mapping. Remote awareness must stay hidden during that transition.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testRemoteCursorHiddenDuringLocalStructuralChange = (_tc) => {
+  const ydoc = new Y.Doc()
+  ydoc.clientID = 1
+  const awareness = new Awareness(ydoc)
+  const view = createViewWithCursor(ydoc, awareness)
+  const remoteClientId = 2
+
+  view.dispatch(
+    view.state.tr.insert(0, [
+      schema.node('paragraph', undefined, schema.text('hello')),
+      schema.node('paragraph', undefined, schema.text('block'))
+    ])
+  )
+  publishRemoteCursor(view, awareness, remoteClientId, 6)
+
+  const initialDoc = view.state.doc
+  const blockNode = initialDoc.child(1)
+  const blockStart = initialDoc.child(0).nodeSize
+  view.dispatch(
+    view.state.tr
+      .delete(blockStart, blockStart + blockNode.nodeSize)
+      .insert(0, blockNode)
+  )
+
+  const decorations = yCursorPluginKey.getState(view.state)
+  t.assert(
+    decorations.find(0, view.state.doc.content.size).length === 0,
+    'stale awareness should not leave a caret or selection highlight behind'
+  )
+}
+
+/**
+ * A remote cursor returns only after its owner restores its selection and
+ * publishes a position against the changed Yjs document.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testRemoteCursorRestoredAfterStructuralChange = async (_tc) => {
+  const ydocA = new Y.Doc()
+  ydocA.clientID = 1
+  const ydocB = new Y.Doc()
+  ydocB.clientID = 2
+  const awarenessA = new Awareness(ydocA)
+  const awarenessB = new Awareness(ydocB)
+  const viewA = createViewWithCursor(ydocA, awarenessA)
+  const viewB = createViewWithCursor(ydocB, awarenessB)
+
+  viewA.dispatch(
+    viewA.state.tr.insert(0, [
+      schema.node('paragraph', undefined, schema.text('hello')),
+      schema.node('paragraph', undefined, schema.text('block'))
+    ])
+  )
+  syncYDocs(ydocA, ydocB)
+
+  const typingCursorPos = 6
+  // JSDOM cannot focus an EditorView, but the cursor plugin must see A as
+  // focused to publish the selection through awareness.
+  viewA.hasFocus = () => true
+  viewA.dispatch(
+    viewA.state.tr.setSelection(TextSelection.create(viewA.state.doc, typingCursorPos))
+  )
+  const initialCursor = awarenessA.getLocalState().cursor
+  syncAwareness(awarenessA, awarenessB, ydocA.clientID)
+  await promise.wait(10)
+
+  const initialDoc = viewB.state.doc
+  const movedBlock = initialDoc.child(1)
+  const blockStart = initialDoc.child(0).nodeSize
+  viewB.dispatch(
+    viewB.state.tr
+      .delete(blockStart, blockStart + movedBlock.nodeSize)
+      .insert(0, movedBlock)
+  )
+  t.assert(
+    getRemoteCursorWidgetPos(viewB) === null,
+    'stale remote cursor should be hidden while the document update is in flight'
+  )
+
+  Y.applyUpdate(ydocA, Y.encodeStateAsUpdate(ydocB))
+
+  const expectedCursorPos = typingCursorPos + movedBlock.nodeSize
+  t.assert(
+    viewA.state.selection.head === expectedCursorPos,
+    `local cursor should recover to ${expectedCursorPos}, got ${viewA.state.selection.head}`
+  )
+  const restoredCursor = awarenessA.getLocalState().cursor
+  t.assert(
+    !Y.compareRelativePositions(initialCursor.head, restoredCursor.head),
+    'typing user should publish a new cursor position after the structural update'
+  )
+
+  syncAwareness(awarenessA, awarenessB, ydocA.clientID)
+  await promise.wait(10)
+
+  const widgetPos = getRemoteCursorWidgetPos(viewB)
+  t.assert(
+    widgetPos === expectedCursorPos,
+    `refreshed remote cursor should render at ${expectedCursorPos}, got ${widgetPos}`
   )
 }
 
@@ -2022,6 +2232,41 @@ export const testIsMisresolvedAfterStructuralChange = (_tc) => {
     isMisresolvedAfterStructuralChange(movedStartOldDoc, movedStartNewDoc, 1, 1),
     'paragraph-start selections attached to the wrong block should be treated as misresolved'
   )
+
+  const hrNewDoc = schema.node('doc', undefined, [
+    schema.node('horizontal_rule'),
+    schema.node('paragraph', undefined, schema.text('hello')),
+    schema.node('paragraph', undefined, schema.text('world'))
+  ])
+  t.assert(
+    isMisresolvedAfterStructuralChange(movedStartOldDoc, hrNewDoc, 3, 1),
+    'textblock cursors resolving into a non-textblock should be treated as misresolved'
+  )
+
+  const headingOldDoc = schema.node('doc', undefined, [
+    schema.node('heading', { level: 1 }, schema.text('same')),
+    schema.node('heading', { level: 2 }, schema.text('same'))
+  ])
+  const headingNewDoc = schema.node('doc', undefined, [
+    schema.node('heading', { level: 2 }, schema.text('same')),
+    schema.node('heading', { level: 1 }, schema.text('same'))
+  ])
+  t.assert(
+    isMisresolvedAfterStructuralChange(headingOldDoc, headingNewDoc, 11, 11),
+    'non-zero offsets landing in a same-text block with different attrs should be treated as misresolved'
+  )
+
+  const dupOldDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('same'))
+  ])
+  const dupNewDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('same')),
+    schema.node('paragraph', undefined, schema.text('same'))
+  ])
+  t.assert(
+    isMisresolvedAfterStructuralChange(dupOldDoc, dupNewDoc, 3, 9) === false,
+    'when text, attrs and offset all agree the Yjs resolution should be trusted'
+  )
 }
 
 /**
@@ -2127,6 +2372,145 @@ export const testFindAbsolutePositionAfterStructuralChange = (_tc) => {
   t.assert(
     findAbsolutePositionAfterStructuralChange(oldDoc, newDoc, 999) === null,
     'out-of-range positions should return null'
+  )
+}
+
+/**
+ * @param {t.TestCase} _tc
+ */
+export const testFindAbsolutePositionWithDivergedText = (_tc) => {
+  // Local typing diverged the text (non-prefix), block identified by attrs.
+  const attrsOldDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('intro')),
+    schema.node('heading', { level: 2 }, schema.text('helXlo wor'))
+  ])
+  const attrsNewDoc = schema.node('doc', undefined, [
+    schema.node('heading', { level: 2 }, schema.text('hello wor')),
+    schema.node('paragraph', undefined, schema.text('intro'))
+  ])
+  t.assert(
+    findAbsolutePositionAfterStructuralChange(attrsOldDoc, attrsNewDoc, 12) === 5,
+    'blocks with distinctive attrs should remap even when text diverged'
+  )
+
+  // Ambiguous attrs and non-prefix diverged text leave no reliable signal.
+  const ambiguousOldDoc = schema.node('doc', undefined, [
+    schema.node('heading', { level: 2 }, schema.text('aXa')),
+    schema.node('heading', { level: 2 }, schema.text('bbb'))
+  ])
+  const ambiguousNewDoc = schema.node('doc', undefined, [
+    schema.node('heading', { level: 2 }, schema.text('aa')),
+    schema.node('heading', { level: 2 }, schema.text('bbb'))
+  ])
+  t.assert(
+    findAbsolutePositionAfterStructuralChange(ambiguousOldDoc, ambiguousNewDoc, 3) === null,
+    'ambiguous attrs with diverged text should not guess a block'
+  )
+
+  // A remote attr-only edit must not shadow the text match (pass order).
+  const levelOldDoc = schema.node('doc', undefined, [
+    schema.node('heading', { level: 2 }, schema.text('alpha')),
+    schema.node('heading', { level: 2 }, schema.text('beta'))
+  ])
+  const levelNewDoc = schema.node('doc', undefined, [
+    schema.node('heading', { level: 3 }, schema.text('alpha')),
+    schema.node('heading', { level: 2 }, schema.text('beta'))
+  ])
+  t.assert(
+    findAbsolutePositionAfterStructuralChange(levelOldDoc, levelNewDoc, 4) === 4,
+    'text matching should win over attrs when a remote edit changed only attrs'
+  )
+
+  // Trailing in-flight keystrokes: new text is a prefix of the old text.
+  const prefixOldDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('typing her')),
+    schema.node('paragraph', undefined, schema.text('other'))
+  ])
+  const prefixNewDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('other')),
+    schema.node('paragraph', undefined, schema.text('typing he'))
+  ])
+  t.assert(
+    findAbsolutePositionAfterStructuralChange(prefixOldDoc, prefixNewDoc, 11) === 17,
+    'a unique prefix match should recover the block during in-flight typing'
+  )
+
+  // Empty text is a prefix of everything and must never match by prefix.
+  const emptyPrefixOldDoc = schema.node('doc', undefined, [
+    schema.node('paragraph'),
+    schema.node('paragraph', undefined, schema.text('x'))
+  ])
+  const emptyPrefixNewDoc = schema.node('doc', undefined, [
+    schema.node('paragraph', undefined, schema.text('x')),
+    schema.node('paragraph', undefined, schema.text('y'))
+  ])
+  t.assert(
+    findAbsolutePositionAfterStructuralChange(emptyPrefixOldDoc, emptyPrefixNewDoc, 1) === null,
+    'empty-text blocks should never match by prefix'
+  )
+}
+
+const nestedSchema = new Schema({
+  nodes: {
+    doc: { content: 'block+' },
+    pullquote: {
+      attrs: { uri: { default: null } },
+      content: 'paragraph+',
+      group: 'block'
+    },
+    paragraph: { content: 'inline*', group: 'block' },
+    text: { group: 'inline' }
+  }
+})
+
+/**
+ * @param {t.TestCase} _tc
+ */
+export const testFindAbsolutePositionInNestedBlocks = (_tc) => {
+  const oldDoc = nestedSchema.node('doc', undefined, [
+    nestedSchema.node('pullquote', { uri: 'x' }, [
+      nestedSchema.node('paragraph', undefined, nestedSchema.text('hello wor')),
+      nestedSchema.node('paragraph', undefined, nestedSchema.text('by me'))
+    ]),
+    nestedSchema.node('paragraph', undefined, nestedSchema.text('outro'))
+  ])
+  const newDoc = nestedSchema.node('doc', undefined, [
+    nestedSchema.node('paragraph', undefined, nestedSchema.text('outro')),
+    nestedSchema.node('pullquote', { uri: 'x' }, [
+      nestedSchema.node('paragraph', undefined, nestedSchema.text('hello wo')),
+      nestedSchema.node('paragraph', undefined, nestedSchema.text('by me'))
+    ])
+  ])
+
+  // Cursor at the end of the first inner paragraph (abs 11, offset 9). The
+  // raw-offset remap used to land at abs 18, between the inner paragraphs;
+  // the path walk must clamp into the first inner paragraph instead.
+  t.assert(
+    findAbsolutePositionAfterStructuralChange(oldDoc, newDoc, 11) === 17,
+    'nested cursors should clamp into the same inner textblock'
+  )
+
+  const restructuredNewDoc = nestedSchema.node('doc', undefined, [
+    nestedSchema.node('paragraph', undefined, nestedSchema.text('outro')),
+    nestedSchema.node('pullquote', { uri: 'x' }, [
+      nestedSchema.node('paragraph', undefined, nestedSchema.text('hello worby me'))
+    ])
+  ])
+  // Cursor in the second inner paragraph; the matched block no longer has one.
+  t.assert(
+    findAbsolutePositionAfterStructuralChange(oldDoc, restructuredNewDoc, 14) === null,
+    'a changed inner structure should bail out instead of guessing'
+  )
+
+  const typeChangedOldDoc = schema.node('doc', undefined, [
+    schema.node('blockquote', undefined, schema.node('paragraph', undefined, schema.text('same')))
+  ])
+  const typeChangedNewDoc = schema.node('doc', undefined, [
+    schema.node('blockquote', undefined, schema.node('heading', { level: 1 }, schema.text('same')))
+  ])
+  t.assert(
+    findAbsolutePositionAfterStructuralChange(typeChangedOldDoc, typeChangedNewDoc, 3) === null,
+    'a changed nested node type should bail out instead of guessing'
   )
 }
 

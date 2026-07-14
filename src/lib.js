@@ -316,6 +316,73 @@ export const relativePositionToAbsolutePosition = (y, documentType, relPos, mapp
 }
 
 /**
+ * Shallow attrs comparison. Attr values are primitives in most schemas;
+ * non-primitive values fail the check and callers fall back to text matching.
+ *
+ * @param {Object<string, any>} a
+ * @param {Object<string, any>} b
+ * @return {boolean}
+ */
+const attrsEqual = (a, b) => {
+  if (a === b) {
+    return true
+  }
+  const aKeys = Object.keys(a)
+  return aKeys.length === Object.keys(b).length && aKeys.every((k) => a[k] === b[k])
+}
+
+/**
+ * Returns true when any attr deviates from its spec default or has none.
+ * Default-only attrs cannot tell same-type siblings apart.
+ *
+ * @param {import('prosemirror-model').Node} node
+ * @return {boolean}
+ */
+const hasDistinctiveAttrs = (node) => {
+  const specAttrs = node.type.spec.attrs || {}
+  return Object.keys(node.attrs).some((key) => {
+    const spec = specAttrs[key]
+    return spec == null ||
+      !Object.prototype.hasOwnProperty.call(spec, 'default') ||
+      spec.default !== node.attrs[key]
+  })
+}
+
+/**
+ * Remaps a position into a matched block by walking the same child-index path
+ * it had in the old block. A raw byte offset would overshoot into a sibling
+ * inner textblock when the old block contains local keystrokes that are not
+ * yet part of the rebuilt document.
+ *
+ * @param {import('prosemirror-model').ResolvedPos} $oldPos
+ * @param {number} newBlockStart
+ * @param {import('prosemirror-model').Node} newBlock
+ * @return {number|null}
+ */
+const remapIntoBlock = ($oldPos, newBlockStart, newBlock) => {
+  let pos = newBlockStart + 1
+  let node = newBlock
+  for (let depth = 1; depth < $oldPos.depth; depth++) {
+    const idx = $oldPos.index(depth)
+    if (idx >= node.childCount) {
+      return null
+    }
+    for (let i = 0; i < idx; i++) {
+      pos += node.child(i).nodeSize
+    }
+    pos += 1
+    node = node.child(idx)
+    if (node.type !== $oldPos.node(depth + 1).type) {
+      return null
+    }
+  }
+  if (!node.isTextblock) {
+    return null
+  }
+  return pos + Math.min($oldPos.parentOffset, node.content.size)
+}
+
+/**
  * @param {import('prosemirror-model').Node} oldDoc
  * @param {import('prosemirror-model').Node} newDoc
  * @param {number} absPos
@@ -335,32 +402,100 @@ export const findAbsolutePositionAfterStructuralChange = (oldDoc, newDoc, absPos
     return null
   }
   const targetChild = oldDoc.child(targetIdx)
-  const offsetInChild = absPos - pos
+  const $oldPos = oldDoc.resolve(absPos)
 
-  let occurrence = 0
-  for (let i = 0; i <= targetIdx; i++) {
-    const child = oldDoc.child(i)
-    if (child.type === targetChild.type && child.textContent === targetChild.textContent) {
-      occurrence++
+  /**
+   * @param {number} newBlockStart
+   * @param {import('prosemirror-model').Node} newBlock
+   * @return {number|null}
+   */
+  const place = (newBlockStart, newBlock) => {
+    // Positions between top-level blocks carry no inner path; clamp them just
+    // inside the matched block like the previous raw-offset remap did.
+    if ($oldPos.depth === 0) {
+      const remapped = newBlockStart + (absPos - pos)
+      const contentStart = newBlockStart + 1
+      const contentEnd = newBlockStart + newBlock.nodeSize - 1
+      return Math.max(contentStart, Math.min(remapped, contentEnd))
     }
+    return remapIntoBlock($oldPos, newBlockStart, newBlock)
   }
 
-  let matchCount = 0
-  let newPos = 0
-  for (let i = 0; i < newDoc.childCount; i++) {
-    const child = newDoc.child(i)
-    if (child.type === targetChild.type && child.textContent === targetChild.textContent) {
-      matchCount++
-      if (matchCount === occurrence) {
-        const remapped = newPos + offsetInChild
-        const contentStart = newPos + 1
-        const contentEnd = newPos + child.nodeSize - 1
-        return Math.max(contentStart, Math.min(remapped, contentEnd))
+  /**
+   * Finds the Nth block in newDoc matching `pred`, where N is the number of
+   * matching blocks in oldDoc up to and including the target block.
+   *
+   * @param {function(import('prosemirror-model').Node): boolean} pred
+   * @param {boolean} requireUnique
+   * @return {number|null}
+   */
+  const findByPredicate = (pred, requireUnique = false) => {
+    let occurrence = 0
+    for (let i = 0; i <= targetIdx; i++) {
+      if (pred(oldDoc.child(i))) {
+        occurrence++
       }
     }
-    newPos += child.nodeSize
+    let matchCount = 0
+    let matchStart = -1
+    let matchBlock = null
+    let newPos = 0
+    for (let i = 0; i < newDoc.childCount; i++) {
+      const child = newDoc.child(i)
+      if (pred(child)) {
+        matchCount++
+        if (matchCount === occurrence) {
+          matchStart = newPos
+          matchBlock = child
+        }
+      }
+      newPos += child.nodeSize
+    }
+    if (matchBlock === null || (requireUnique && (occurrence !== 1 || matchCount !== 1))) {
+      return null
+    }
+    return place(matchStart, matchBlock)
   }
-  return null
+
+  /**
+   * @param {import('prosemirror-model').Node} child
+   * @return {boolean}
+   */
+  const sameTypeAndAttrs = (child) =>
+    child.type === targetChild.type && attrsEqual(child.attrs, targetChild.attrs)
+  const oldText = targetChild.textContent
+
+  const byAll = findByPredicate((child) => sameTypeAndAttrs(child) && child.textContent === oldText)
+  if (byAll !== null) {
+    return byAll
+  }
+
+  // Text must be matched before attrs: after a remote attr-only edit, the
+  // attrs pass would steer the cursor into a sibling that kept the old attrs.
+  const byText = findByPredicate(
+    (child) => child.type === targetChild.type && child.textContent === oldText
+  )
+  if (byText !== null) {
+    return byText
+  }
+
+  // In-flight local typing diverges the text between both docs. Distinctive
+  // attrs still identify the block; default-only attrs match every sibling.
+  if (hasDistinctiveAttrs(targetChild)) {
+    const byAttrs = findByPredicate(sameTypeAndAttrs, true)
+    if (byAttrs !== null) {
+      return byAttrs
+    }
+  }
+
+  // Trailing in-flight keystrokes leave a prefix relation between old and new
+  // text. Empty text is a prefix of everything and must never match.
+  return findByPredicate(
+    (child) => sameTypeAndAttrs(child) &&
+      oldText !== '' && child.textContent !== '' &&
+      (oldText.startsWith(child.textContent) || child.textContent.startsWith(oldText)),
+    true
+  )
 }
 
 /**
@@ -421,8 +556,13 @@ export const isMisresolvedAfterStructuralChange = (oldDoc, newDoc, oldAbs, resol
   }
   const $old = oldDoc.resolve(oldAbs)
   const $new = newDoc.resolve(resolvedAbs)
-  if (!$old.parent.isTextblock || !$new.parent.isTextblock) {
+  if (!$old.parent.isTextblock) {
     return false
+  }
+  // A textblock cursor cannot legitimately resolve into a non-textblock;
+  // a structural reorder replaced the block via delete + insert.
+  if (!$new.parent.isTextblock) {
+    return true
   }
   if ($old.parent.textContent !== $new.parent.textContent) {
     return true
@@ -430,7 +570,13 @@ export const isMisresolvedAfterStructuralChange = (oldDoc, newDoc, oldAbs, resol
   if ($old.parentOffset !== 0 && $new.parentOffset === 0) {
     return true
   }
-  if ($old.parentOffset === 0 && $new.parentOffset === 0) {
+  const bothAtStart = $old.parentOffset === 0 && $new.parentOffset === 0
+  // A changed offset, type or attrs hints at a same-text sibling. When all
+  // of them agree there is no signal left and the Yjs resolution must win.
+  const suspicious = $old.parentOffset !== $new.parentOffset ||
+    $old.parent.type !== $new.parent.type ||
+    !attrsEqual($old.parent.attrs, $new.parent.attrs)
+  if (bothAtStart || suspicious) {
     const expected = findAbsolutePositionAfterStructuralChange(oldDoc, newDoc, oldAbs)
     return expected !== null && expected !== resolvedAbs
   }
