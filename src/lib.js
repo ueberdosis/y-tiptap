@@ -794,7 +794,7 @@ export function yXmlFragmentToProsemirrorJSON (xmlFragment) {
             const mark = {
               type
             }
-            if (Object.keys(attrs)) {
+            if (Object.keys(attrs).length) {
               mark.attrs = attrs
             }
             return mark
