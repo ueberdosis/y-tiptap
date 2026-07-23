@@ -360,6 +360,33 @@ export const testXmlFragmentTransformation = (_tc) => {
   t.compare(stateJSON, backandforth)
 }
 
+export const testXmlFragmentTransformationOmitsEmptyMarkAttrs = (_tc) => {
+  const stateJSON = {
+    type: 'doc',
+    content: [{
+      type: 'paragraph',
+      content: [{
+        type: 'text',
+        marks: [{ type: 'strong' }],
+        text: 'bold'
+      }, {
+        type: 'text',
+        marks: [{ type: 'comment', attrs: { id: 4 } }],
+        text: 'comment'
+      }]
+    }]
+  }
+  const xml = new Y.XmlFragment()
+  prosemirrorJSONToYXmlFragment(/** @type {any} */ (schema), stateJSON, xml)
+  const doc = new Y.Doc()
+  doc.getMap('root').set('firstDoc', xml)
+
+  t.compare(
+    JSON.parse(JSON.stringify(yXmlFragmentToProsemirrorJSON(xml))),
+    stateJSON
+  )
+}
+
 export const testChangeOrigin = (_tc) => {
   const ydoc = new Y.Doc()
   const yXmlFragment = ydoc.get('prosemirror', Y.XmlFragment)
