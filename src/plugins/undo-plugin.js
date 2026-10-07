@@ -94,13 +94,11 @@ export const yUndoPlugin = ({ protectedNodes = defaultProtectedNodes, trackedOri
     undoManager.on('stack-item-added', ({ stackItem }) => {
       const binding = ystate.binding
       if (binding) {
-        stackItem.meta.set(binding, yUndoPluginKey.getState(view.state).prevSel)
-      }
-    })
-    undoManager.on('stack-item-popped', ({ stackItem }) => {
-      const binding = ystate.binding
-      if (binding) {
-        binding.beforeTransactionSelection = stackItem.meta.get(binding) || binding.beforeTransactionSelection
+        // Use the selection captured before undo/redo changed the Yjs mapping.
+        const selection = undoManager.undoing || undoManager.redoing
+          ? binding.beforeTransactionSelection
+          : yUndoPluginKey.getState(view.state).prevSel
+        stackItem.meta.set(binding, selection)
       }
     })
     return {

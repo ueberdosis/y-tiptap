@@ -723,6 +723,11 @@ export class ProsemirrorBinding {
       this.renderSnapshot(syncState.snapshot, syncState.prevSnapshot)
       return
     }
+    const isUndoRedoOperation = transaction.origin instanceof Y.UndoManager
+    const undoSelection = isUndoRedoOperation ? transaction.origin.currStackItem?.meta.get(this) : null
+    const selection = undoSelection || this.beforeTransactionSelection
+    // Historical absolute positions belong to the saved document, not the current view.
+    const oldDoc = undoSelection ? undefined : this.prosemirrorView.state.doc
     this.mux(() => {
       /**
        * @param {any} _
@@ -751,15 +756,14 @@ export class ProsemirrorBinding {
           this
         )
       ).filter((n) => n !== null)
-      const oldDoc = this.prosemirrorView.state.doc
       // @ts-ignore
       let tr = this._tr.replace(
         0,
         this.prosemirrorView.state.doc.content.size,
         new PModel.Slice(PModel.Fragment.from(fragmentContent), 0, 0)
       )
-      restoreRelativeSelection(tr, this.beforeTransactionSelection, this, oldDoc)
-      tr = tr.setMeta(ySyncPluginKey, { isChangeOrigin: true, isUndoRedoOperation: transaction.origin instanceof Y.UndoManager })
+      restoreRelativeSelection(tr, selection, this, oldDoc)
+      tr = tr.setMeta(ySyncPluginKey, { isChangeOrigin: true, isUndoRedoOperation })
       if (
         this.beforeTransactionSelection !== null && this._isLocalCursorInView()
       ) {
