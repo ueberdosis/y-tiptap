@@ -758,7 +758,10 @@ export class ProsemirrorBinding {
         this.prosemirrorView.state.doc.content.size,
         new PModel.Slice(PModel.Fragment.from(fragmentContent), 0, 0)
       )
-      restoreRelativeSelection(tr, this.beforeTransactionSelection, this, oldDoc)
+      // Yjs already resolves selections correctly for text edits. Structural recovery
+      // matches blocks by content and would move the selection off its text.
+      const textOnlyChange = events.every(event => event.target instanceof Y.XmlText)
+      restoreRelativeSelection(tr, this.beforeTransactionSelection, this, textOnlyChange ? undefined : oldDoc)
       tr = tr.setMeta(ySyncPluginKey, { isChangeOrigin: true, isUndoRedoOperation: transaction.origin instanceof Y.UndoManager })
       if (
         this.beforeTransactionSelection !== null && this._isLocalCursorInView()

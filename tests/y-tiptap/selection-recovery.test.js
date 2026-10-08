@@ -2,7 +2,8 @@ import * as t from 'lib0/testing'
 import * as Y from 'yjs'
 import { TextSelection } from 'prosemirror-state'
 import { findAbsolutePositionAfterStructuralChange } from '../../src/y-tiptap.js'
-import { createNewProsemirrorView, schema, syncYDocs } from '../shared.js'
+import { Schema } from 'prosemirror-model'
+import { createNewProsemirrorView, createNewProsemirrorViewWithSchema, schema, syncYDocs } from '../shared.js'
 
 /**
  * Content-based fallback must run when only the head misresolves to doc start.
@@ -346,5 +347,72 @@ export const testRangeSelectionEndpointsRestoredIndependently = (_tc) => {
   t.assert(
     view1.state.selection.head === headPos + 1,
     `head should keep its Yjs resolution, expected ${headPos + 1}, got ${view1.state.selection.head}`
+  )
+}
+
+// Blocks with an id attribute, like Tiptap's UniqueID extension adds.
+const schemaWithBlockIds = new Schema({
+  nodes: schema.spec.nodes.update('paragraph', {
+    ...schema.spec.nodes.get('paragraph'),
+    attrs: { id: { default: null } }
+  }),
+  marks: schema.spec.marks
+})
+
+/**
+ * @param {number} anchor
+ * @param {number} head
+ * @return {{ anchor: number, head: number }} Selection of a local view after
+ *   a remote user typed at the start of the same paragraph.
+ */
+const selectionAfterRemoteTextEditInSameParagraph = (anchor, head) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+  const view1 = createNewProsemirrorViewWithSchema(ydoc1, schemaWithBlockIds)
+  const view2 = createNewProsemirrorViewWithSchema(ydoc2, schemaWithBlockIds)
+
+  view1.dispatch(
+    view1.state.tr.insert(0, [
+      schemaWithBlockIds.node('paragraph', { id: 'one' }, schemaWithBlockIds.text('Hello world')),
+      schemaWithBlockIds.node('paragraph', { id: 'two' }, schemaWithBlockIds.text('Another line'))
+    ])
+  )
+  syncYDocs(ydoc1, ydoc2)
+
+  view1.dispatch(view1.state.tr.setSelection(TextSelection.create(view1.state.doc, anchor, head)))
+  view2.dispatch(view2.state.tr.insertText('A ', 1))
+  syncYDocs(ydoc1, ydoc2)
+
+  t.compare(view1.state.doc.child(0).textContent, 'A Hello world')
+  return view1.state.selection
+}
+
+/**
+ * A remote text edit in the caret's own paragraph must not move the caret off
+ * its text. The Yjs relative position is already correct.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testLocalCaretFollowsTextAfterRemoteTextEditInSameParagraph = (_tc) => {
+  const { anchor, head } = selectionAfterRemoteTextEditInSameParagraph(12, 12)
+  t.assert(
+    anchor === 14 && head === 14,
+    `caret should stay after "world" (14), got anchor=${anchor} head=${head}`
+  )
+}
+
+/**
+ * A reversed range selection keeps both endpoints and its direction across a
+ * remote text edit earlier in the same paragraph.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testLocalRangeSelectionFollowsTextAfterRemoteTextEditInSameParagraph = (_tc) => {
+  const { anchor, head } = selectionAfterRemoteTextEditInSameParagraph(12, 7)
+  t.assert(
+    anchor === 14 && head === 9,
+    `selection should be anchor=14 head=9, got anchor=${anchor} head=${head}`
   )
 }
