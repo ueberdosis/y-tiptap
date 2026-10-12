@@ -349,10 +349,8 @@ const hasDistinctiveAttrs = (node) => {
 }
 
 /**
- * Remaps a position into a matched block by walking the same child-index path
- * it had in the old block. A raw byte offset would overshoot into a sibling
- * inner textblock when the old block contains local keystrokes that are not
- * yet part of the rebuilt document.
+ * Remaps a position inside a matched block. Nested children are matched again
+ * because a structural edit may have changed their order.
  *
  * @param {import('prosemirror-model').ResolvedPos} $oldPos
  * @param {number} newBlockStart
@@ -360,26 +358,16 @@ const hasDistinctiveAttrs = (node) => {
  * @return {number|null}
  */
 const remapIntoBlock = ($oldPos, newBlockStart, newBlock) => {
-  let pos = newBlockStart + 1
-  let node = newBlock
-  for (let depth = 1; depth < $oldPos.depth; depth++) {
-    const idx = $oldPos.index(depth)
-    if (idx >= node.childCount) {
-      return null
-    }
-    for (let i = 0; i < idx; i++) {
-      pos += node.child(i).nodeSize
-    }
-    pos += 1
-    node = node.child(idx)
-    if (node.type !== $oldPos.node(depth + 1).type) {
-      return null
-    }
+  if ($oldPos.depth > 1) {
+    const innerPosition = findAbsolutePositionAfterStructuralChange(
+      $oldPos.node(1), newBlock, $oldPos.pos - $oldPos.start(1)
+    )
+    return innerPosition === null ? null : newBlockStart + 1 + innerPosition
   }
-  if (!node.isTextblock) {
+  if (!newBlock.isTextblock) {
     return null
   }
-  return pos + Math.min($oldPos.parentOffset, node.content.size)
+  return newBlockStart + 1 + Math.min($oldPos.parentOffset, newBlock.content.size)
 }
 
 /**
@@ -479,9 +467,9 @@ export const findAbsolutePositionAfterStructuralChange = (oldDoc, newDoc, absPos
     return byText
   }
 
-  // In-flight local typing diverges the text between both docs. Distinctive
-  // attrs still identify the block; default-only attrs match every sibling.
-  if (hasDistinctiveAttrs(targetChild)) {
+  // A unique container can survive changes to its children. Textblocks need
+  // distinctive attrs to avoid matching an unrelated sibling after typing.
+  if (!targetChild.isTextblock || hasDistinctiveAttrs(targetChild)) {
     const byAttrs = findByPredicate(sameTypeAndAttrs, true)
     if (byAttrs !== null) {
       return byAttrs

@@ -11,6 +11,7 @@ import * as set from 'lib0/set'
 import { simpleDiff } from 'lib0/diff'
 import * as error from 'lib0/error'
 import { ySyncPluginKey, yUndoPluginKey } from './keys.js'
+import { replaceChangedChildren } from './replaceChangedChildren.js'
 import * as Y from 'yjs'
 import {
   absolutePositionToRelativePosition,
@@ -54,6 +55,18 @@ export const isVisible = (item, snapshot) =>
  * Either a node if type is YXmlElement or an Array of text nodes if YXmlText
  * @typedef {Map<Y.AbstractType<any>, PModel.Node | Array<PModel.Node>>} ProsemirrorMapping
  */
+
+/** @type {WeakMap<ProsemirrorMapping, WeakMap<Y.AbstractType<any>, PModel.Node>>} */
+const projectedMappings = new WeakMap()
+
+/**
+ * @param {ProsemirrorMapping} mapping
+ * @param {Y.AbstractType<any>} type
+ */
+const deleteMapping = (mapping, type) => {
+  mapping.delete(type)
+  projectedMappings.get(mapping)?.delete(type)
+}
 
 /**
  * @typedef {Object} ColorDef
@@ -534,6 +547,7 @@ export class ProsemirrorBinding {
 
   unrenderSnapshot () {
     this.mapping.clear()
+    projectedMappings.delete(this.mapping)
     this.mux(() => {
       const fragmentContent = this.type.toArray().map((t) =>
         createNodeFromYElement(
@@ -555,6 +569,7 @@ export class ProsemirrorBinding {
 
   _forceRerender () {
     this.mapping.clear()
+    projectedMappings.delete(this.mapping)
     this.mux(() => {
       // If this is a forced rerender, this might neither happen as a pm change nor within a Yjs
       // transaction. Then the "before selection" doesn't exist. In this case, we need to create a
@@ -641,6 +656,7 @@ export class ProsemirrorBinding {
     }
     // clear mapping because we are going to rerender
     this.mapping.clear()
+    projectedMappings.delete(this.mapping)
     this.mux(() => {
       historyDoc.transact((transaction) => {
         // before rendering, we are going to sanitize ops and split deleted ops
@@ -728,22 +744,19 @@ export class ProsemirrorBinding {
        * @param {any} _
        * @param {Y.AbstractType<any>} type
        */
-      const delType = (_, type) => this.mapping.delete(type)
+      const delType = (_, type) => deleteMapping(this.mapping, type)
       Y.iterateDeletedStructs(
         transaction,
         transaction.deleteSet,
         (struct) => {
           if (struct.constructor === Y.Item) {
             const type = /** @type {Y.ContentType} */ (/** @type {Y.Item} */ (struct).content).type
-            type && this.mapping.delete(type)
+            type && delType(null, type)
           }
         }
       )
       transaction.changed.forEach(delType)
       transaction.changedParentTypes.forEach(delType)
-      // Rebuild the full Y↔PM mapping so relative cursor positions resolve against
-      // current node sizes after structural changes (e.g. drag-and-drop block moves).
-      this.mapping.clear()
       const fragmentContent = this.type.toArray().map((t) =>
         createNodeIfNotExists(
           /** @type {Y.XmlElement | Y.XmlHook} */ (t),
@@ -752,12 +765,7 @@ export class ProsemirrorBinding {
         )
       ).filter((n) => n !== null)
       const oldDoc = this.prosemirrorView.state.doc
-      // @ts-ignore
-      let tr = this._tr.replace(
-        0,
-        this.prosemirrorView.state.doc.content.size,
-        new PModel.Slice(PModel.Fragment.from(fragmentContent), 0, 0)
-      )
+      let tr = replaceChangedChildren(this._tr, PModel.Fragment.from(fragmentContent))
       restoreRelativeSelection(tr, this.beforeTransactionSelection, this, oldDoc)
       tr = tr.setMeta(ySyncPluginKey, { isChangeOrigin: true, isUndoRedoOperation: transaction.origin instanceof Y.UndoManager })
       if (
@@ -822,7 +830,9 @@ const createNodeIfNotExists = (
   computeYChange
 ) => {
   const node = /** @type {PModel.Node} */ (meta.mapping.get(el))
-  if (node === undefined) {
+  // Local nodes may have a different order for overlapping marks.
+  // Reuse only the last node projected from this Yjs type.
+  if (node === undefined || projectedMappings.get(meta.mapping)?.get(el) !== node) {
     if (el instanceof Y.XmlElement) {
       return createNodeFromYElement(
         el,
@@ -925,15 +935,26 @@ export const createNodeFromYElement = (
           : { type: 'added' }
       }
     }
-    const node = schema.node(el.nodeName, attrs, children)
+    let node = schema.node(el.nodeName, attrs, children)
+    const cachedNode = /** @type {PModel.Node | undefined} */ (meta.mapping.get(el))
+    // Keep local node identities only when their Yjs projection is equal.
+    if (cachedNode !== undefined && cachedNode.eq(node)) {
+      node = cachedNode
+    }
     meta.mapping.set(el, node)
+    let projectedNodes = projectedMappings.get(meta.mapping)
+    if (projectedNodes === undefined) {
+      projectedNodes = new WeakMap()
+      projectedMappings.set(meta.mapping, projectedNodes)
+    }
+    projectedNodes.set(el, node)
     return node
   } catch (e) {
     // an error occured while creating the node. This is probably a result of a concurrent action.
     /** @type {Y.Doc} */ (el.doc).transact((transaction) => {
       /** @type {Y.Item} */ (el._item).delete(transaction)
     }, ySyncPluginKey)
-    meta.mapping.delete(el)
+    deleteMapping(meta.mapping, el)
     return null
   }
 }
@@ -1203,7 +1224,7 @@ const findMappedChildAnchors = (yChildren, pChildren, meta) => {
  */
 const deleteYChildren = (yDomFragment, index, length, meta) => {
   if (length > 0) {
-    yDomFragment.slice(index, index + length).forEach(type => meta.mapping.delete(type))
+    yDomFragment.slice(index, index + length).forEach(type => deleteMapping(meta.mapping, type))
     yDomFragment.delete(index, length)
   }
 }
@@ -1628,7 +1649,7 @@ export const updateYFragment = (y, yDomFragment, pNode, meta) => {
           )
           right += 1
         } else {
-          meta.mapping.delete(yDomFragment.get(left))
+          deleteMapping(meta.mapping, yDomFragment.get(left))
           yDomFragment.delete(left, 1)
           yDomFragment.insert(left, [
             createTypeFromTextOrElementNode(leftP, meta)
@@ -1641,12 +1662,12 @@ export const updateYFragment = (y, yDomFragment, pNode, meta) => {
     if (
       yChildCnt === 1 && pChildCnt === 0 && yChildren[0] instanceof Y.XmlText
     ) {
-      meta.mapping.delete(yChildren[0])
+      deleteMapping(meta.mapping, yChildren[0])
       // Edge case handling https://github.com/yjs/y-prosemirror/issues/108
       // Only delete the content of the Y.Text to retain remote changes on the same Y.Text object
       yChildren[0].delete(0, yChildren[0].length)
     } else if (yDelLen > 0) {
-      yDomFragment.slice(left, left + yDelLen).forEach(type => meta.mapping.delete(type))
+      yDomFragment.slice(left, left + yDelLen).forEach(type => deleteMapping(meta.mapping, type))
       yDomFragment.delete(left, yDelLen)
     }
     if (left + right < pChildCnt) {
