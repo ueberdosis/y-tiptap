@@ -1,3 +1,4 @@
+export * from './y-tiptap/awareness.test.js'
 export * from './y-tiptap/collaboration.test.js'
 export * from './y-tiptap/conversion.test.js'
 export * from './y-tiptap/cursor-mapping.test.js'

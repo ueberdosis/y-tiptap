@@ -99,7 +99,7 @@ export const createDecorations = (
     // `aw` can be null when a client disconnects, so we guard against it
     // before reading `cursor` to avoid a TypeError.
     if (aw && aw.cursor != null) {
-      const user = aw.user || {}
+      const user = { ...aw.user }
       if (user.color == null) {
         user.color = '#ffa500'
       } else if (!rxValidColor.test(user.color)) {
@@ -226,9 +226,8 @@ export const yCursorPlugin = (
       }
       /**
        * @param {import('prosemirror-view').EditorView} editorView
-       * @param {{ force?: boolean }} [opts]
        */
-      const updateCursorInfo = (editorView, opts = {}) => {
+      const updateCursorInfo = (editorView) => {
         const ystate = ySyncPluginKey.getState(editorView.state)
         // `ystate` is undefined during sync-plugin init and Y.Doc transitions;
         // reading from it here would throw and break cursor tracking for the view.
@@ -254,7 +253,6 @@ export const yCursorPlugin = (
             ystate.binding.mapping
           )
           if (
-            opts.force ||
             current.cursor == null ||
             !Y.compareRelativePositions(
               Y.createRelativePositionFromJSON(current.cursor.anchor),
@@ -288,15 +286,7 @@ export const yCursorPlugin = (
       view.dom.addEventListener('focusin', onFocusChange)
       view.dom.addEventListener('focusout', onFocusChange)
       return {
-        update: (editorView, prevState) => {
-          const ystate = ySyncPluginKey.getState(editorView.state)
-          const forceAwarenessUpdate = !!(
-            ystate?.isChangeOrigin &&
-            prevState?.doc &&
-            !prevState.doc.eq(editorView.state.doc)
-          )
-          updateCursorInfo(editorView, { force: forceAwarenessUpdate })
-        },
+        update: updateCursorInfo,
         destroy: () => {
           view.dom.removeEventListener('focusin', onFocusChange)
           view.dom.removeEventListener('focusout', onFocusChange)
