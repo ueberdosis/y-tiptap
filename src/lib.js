@@ -383,6 +383,36 @@ const remapIntoBlock = ($oldPos, newBlockStart, newBlock) => {
 }
 
 /**
+ * Counts top-level empty blocks with the same type and attrs as `target`.
+ *
+ * @param {import('prosemirror-model').Node} doc
+ * @param {import('prosemirror-model').Node} target
+ * @return {number}
+ */
+const countEmptyBlocksLike = (doc, target) => {
+  let count = 0
+  doc.forEach((child) => {
+    if (child.type === target.type && attrsEqual(child.attrs, target.attrs) && child.textContent === '') {
+      count++
+    }
+  })
+  return count
+}
+
+/**
+ * Empty blocks with default-only attrs are only told apart by their ordinal,
+ * which is meaningless once a remote peer inserted or filled one of them (#51).
+ *
+ * @param {import('prosemirror-model').Node} oldDoc
+ * @param {import('prosemirror-model').Node} newDoc
+ * @param {import('prosemirror-model').Node} target
+ * @return {boolean}
+ */
+const hasShiftedEmptyOrdinal = (oldDoc, newDoc, target) =>
+  target.textContent === '' && !hasDistinctiveAttrs(target) &&
+  countEmptyBlocksLike(oldDoc, target) !== countEmptyBlocksLike(newDoc, target)
+
+/**
  * @param {import('prosemirror-model').Node} oldDoc
  * @param {import('prosemirror-model').Node} newDoc
  * @param {number} absPos
@@ -465,7 +495,10 @@ export const findAbsolutePositionAfterStructuralChange = (oldDoc, newDoc, absPos
     child.type === targetChild.type && attrsEqual(child.attrs, targetChild.attrs)
   const oldText = targetChild.textContent
 
-  const byAll = findByPredicate((child) => sameTypeAndAttrs(child) && child.textContent === oldText)
+  // A shifted empty ordinal must not pick a sibling: require a unique match instead.
+  const requireUniqueText = hasShiftedEmptyOrdinal(oldDoc, newDoc, targetChild)
+
+  const byAll = findByPredicate((child) => sameTypeAndAttrs(child) && child.textContent === oldText, requireUniqueText)
   if (byAll !== null) {
     return byAll
   }
@@ -473,7 +506,8 @@ export const findAbsolutePositionAfterStructuralChange = (oldDoc, newDoc, absPos
   // Text must be matched before attrs: after a remote attr-only edit, the
   // attrs pass would steer the cursor into a sibling that kept the old attrs.
   const byText = findByPredicate(
-    (child) => child.type === targetChild.type && child.textContent === oldText
+    (child) => child.type === targetChild.type && child.textContent === oldText,
+    requireUniqueText
   )
   if (byText !== null) {
     return byText

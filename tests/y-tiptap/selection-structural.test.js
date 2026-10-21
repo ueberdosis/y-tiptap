@@ -148,3 +148,81 @@ export const testNodeRangeSelectionRestoredWithDuplicateBlockText = (_tc) => {
     'node range should still select the second duplicate block, not the first'
   )
 }
+
+/**
+ * Builds two synced views with the given top-level paragraphs.
+ *
+ * @param {string[]} texts
+ */
+const createSyncedParagraphs = (texts) => {
+  const ydoc1 = new Y.Doc()
+  ydoc1.clientID = 1
+  const ydoc2 = new Y.Doc()
+  ydoc2.clientID = 2
+  const view1 = createNewProsemirrorView(ydoc1)
+  const view2 = createNewProsemirrorView(ydoc2)
+  // replace the initial empty paragraph so the document holds exactly `texts`
+  view1.dispatch(
+    view1.state.tr.replaceWith(0, view1.state.doc.content.size, texts.map((text) =>
+      schema.node('paragraph', undefined, text === '' ? undefined : schema.text(text))
+    ))
+  )
+  syncYDocs(ydoc1, ydoc2)
+  return { ydoc1, ydoc2, view1, view2 }
+}
+
+/**
+ * Position just inside the top-level block at `index`.
+ *
+ * @param {import('prosemirror-model').Node} doc
+ * @param {number} index
+ */
+const startOfBlock = (doc, index) => {
+  let pos = 0
+  for (let i = 0; i < index; i++) {
+    pos += doc.child(i).nodeSize
+  }
+  return pos + 1
+}
+
+/**
+ * Two peers press Enter at the end of the same line, one after the other: the remote
+ * empty paragraph lands right before the local caret's empty paragraph. The caret must
+ * stay in its own (now shifted) empty block instead of jumping into the remote one.
+ * Empty blocks cannot be told apart by text (#51).
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testCaretStaysInOwnEmptyBlockWhenRemoteInsertsEmptySibling = (_tc) => {
+  const { ydoc1, ydoc2, view1, view2 } = createSyncedParagraphs(['first', 'second', ''])
+  view1.dispatch(
+    view1.state.tr.setSelection(TextSelection.create(view1.state.doc, startOfBlock(view1.state.doc, 2)))
+  )
+  t.assert(view1.state.selection.$from.index(0) === 2, 'precondition: caret in the trailing empty block')
+
+  // the remote peer splits right after "second" — a new empty paragraph before ours
+  const afterSecond = startOfBlock(view2.state.doc, 2) - 1
+  view2.dispatch(view2.state.tr.insert(afterSecond, schema.node('paragraph')))
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  t.compare(view1.state.doc.childCount, 4, 'remote empty paragraph applied')
+  t.compare(view1.state.selection.$from.index(0), 3, 'caret stays in its own empty block (shifted by one)')
+}
+
+/**
+ * #51: a remote peer types into the empty block the local caret is in, while other empty
+ * blocks exist. The caret must stay in its own block.
+ *
+ * @param {t.TestCase} _tc
+ */
+export const testCaretStaysWhenRemoteTypesIntoCaretEmptyBlock = (_tc) => {
+  const { ydoc1, ydoc2, view1, view2 } = createSyncedParagraphs(['', '', ''])
+  view1.dispatch(
+    view1.state.tr.setSelection(TextSelection.create(view1.state.doc, startOfBlock(view1.state.doc, 1)))
+  )
+  view2.dispatch(view2.state.tr.insertText('ab', startOfBlock(view2.state.doc, 1)))
+  Y.applyUpdate(ydoc1, Y.encodeStateAsUpdate(ydoc2))
+
+  t.compare(view1.state.doc.child(1).textContent, 'ab', 'remote text applied')
+  t.compare(view1.state.selection.$from.index(0), 1, 'caret stays in the block the remote typed into')
+}
