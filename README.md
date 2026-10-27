@@ -1,5 +1,8 @@
 # y-tiptap
 
+> [!IMPORTANT]
+> The `@tiptap/y-tiptap` package has moved to the [Tiptap repository](https://github.com/ueberdosis/tiptap/tree/main/packages/y-tiptap). Please use that repository for the latest source code, issues, and pull requests.
+
 > [Tiptap](http://tiptap.dev/) Binding for [Yjs](https://github.com/yjs/yjs)
 
 This binding maps a Y.XmlFragment to the ProseMirror state.
